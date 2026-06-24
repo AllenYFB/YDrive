@@ -1,4 +1,4 @@
-# YDrive CubeMX 配置与复刻计划
+﻿# YDrive CubeMX 配置与复刻计划
 
 本文记录当前 YDrive 工程的 CubeMX 选择，以及后续从零复刻 ODrive 思路的实现顺序。目标是让后人可以按同一条路线重新生成工程、编译、下载、调试，并逐步补齐 FOC、电机校准、编码器、闭环控制和通信。
 
@@ -11,7 +11,7 @@ YDrive 是一个基于 STM32F405 的单电机 ODrive 风格控制器实验工程
 - 使用 STM32CubeMX 6.16.0 生成基础工程
 - 使用 CMake + VSCode 编译调试
 - 使用 FreeRTOS 运行低速任务
-- 使用 USB CDC 和 UART4 做调试通信
+- 第一阶段使用 USB CDC 做启动验证和调试输出
 - 先只做 M0 单电机，暂不启用 TIM8/M1
 - 高速 FOC 后续放在 TIM1/ADC 同步时序中，不放进普通 FreeRTOS 任务
 
@@ -146,7 +146,7 @@ EN_GATE = LOW
 | USB FS DP | PA12 |
 | USB_DEVICE | CDC |
 
-UART4 使用 115200 8N1，作为早期启动日志和调试串口。
+UART4 在原版 ODrive v3 中也有配置，但 YDrive 第一阶段不依赖 UART4，启动日志先走 USB CDC。
 
 USB CDC 在 `StartDefaultTask()` 里调用 `MX_USB_DEVICE_Init()` 初始化。USB 能枚举，说明 FreeRTOS 调度器和 defaultTask 已经跑起来。
 
@@ -167,7 +167,7 @@ USB CDC 在 `StartDefaultTask()` 里调用 `MX_USB_DEVICE_Init()` 初始化。US
 当前 `Core/Src/freertos.c` 的 `StartDefaultTask()` 已完成最小启动验证：
 
 - 调用 `MX_USB_DEVICE_Init()`
-- UART4 打印 `YDrive boot`
+- USB CDC 输出 `YDrive boot`
 - 每 1 秒读取一次 `nFAULT`
 - 打印 `nFAULT=1 OK` 或 `nFAULT=0 FAULT`
 - 循环中持续保持 `EN_GATE = LOW`
@@ -184,7 +184,7 @@ USB CDC 在 `StartDefaultTask()` 里调用 `MX_USB_DEVICE_Init()` 初始化。US
 - ST-Link 能下载
 - 调试能进 `main()`
 - FreeRTOS defaultTask 跑起来
-- UART4 能打印 `YDrive boot`
+- USB CDC 能输出 `YDrive boot`
 - USB CDC 能枚举
 - 能读取 `nFAULT`
 - `EN_GATE` 始终保持 LOW
@@ -288,7 +288,7 @@ USB CDC 在 `StartDefaultTask()` 里调用 `MX_USB_DEVICE_Init()` 初始化。US
 目标：
 
 - USB CDC 命令协议
-- UART 调试命令
+- UART 可选调试命令
 - 参数读写
 - Flash 保存配置
 - 错误码查询与清除
@@ -312,4 +312,6 @@ USB CDC 在 `StartDefaultTask()` 里调用 `MX_USB_DEVICE_Init()` 初始化。US
 - CubeMX 重新生成后，确认 `Core/Src/freertos.c` 中用户代码区仍保留启动验证逻辑。
 - 如果 GCC 链接脚本报 `READONLY` 相关错误，检查 `STM32F405XX_FLASH.ld` 中 `.ARM.extab/.ARM/.init_array` 等段属性。
 - `YDrive/build/` 是本地构建产物，不上传到 git。
+
+
 

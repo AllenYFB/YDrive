@@ -25,7 +25,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "usart.h"
+#include "usbd_cdc_if.h"
 
 /* USER CODE END Includes */
 
@@ -123,7 +123,8 @@ void StartDefaultTask(void *argument)
   const uint8_t nfault_fault_msg[] = "nFAULT=0 FAULT\r\n";
 
   HAL_GPIO_WritePin(EN_GATE_GPIO_Port, EN_GATE_Pin, GPIO_PIN_RESET);
-  HAL_UART_Transmit(&huart4, (uint8_t *)boot_msg, sizeof(boot_msg) - 1U, 100U);
+  osDelay(1000);
+  CDC_Transmit_FS((uint8_t *)boot_msg, sizeof(boot_msg) - 1U);
 
   /* Infinite loop */
   for(;;)
@@ -133,9 +134,9 @@ void StartDefaultTask(void *argument)
     HAL_GPIO_WritePin(EN_GATE_GPIO_Port, EN_GATE_Pin, GPIO_PIN_RESET);
 
     if (nfault_state == GPIO_PIN_SET) {
-      HAL_UART_Transmit(&huart4, (uint8_t *)nfault_ok_msg, sizeof(nfault_ok_msg) - 1U, 100U);
+      CDC_Transmit_FS((uint8_t *)nfault_ok_msg, sizeof(nfault_ok_msg) - 1U);
     } else {
-      HAL_UART_Transmit(&huart4, (uint8_t *)nfault_fault_msg, sizeof(nfault_fault_msg) - 1U, 100U);
+      CDC_Transmit_FS((uint8_t *)nfault_fault_msg, sizeof(nfault_fault_msg) - 1U);
     }
 
     osDelay(1000);
