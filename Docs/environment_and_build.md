@@ -1,22 +1,22 @@
-﻿# YDrive 环境配置与编译说明
+# YDrive 环境配置与 VSCode 编译运行说明
 
-本文说明如何配置 YDrive 的 Windows 开发环境，以及如何在 VSCode/PowerShell 中编译生成 `.elf`、`.bin`、`.hex` 文件。
+本文只记录开发环境、新工程在 VSCode 中如何编译/烧录/调试，以及哪些工程文档需要自己维护。
 
-## 1. 目录说明
+## 1. 目录约定
 
-仓库根目录是：
+仓库根目录：
 
 ```powershell
 C:\Users\mrg\Desktop\PMSMFocLib\YDrive
 ```
 
-真正的 STM32 CubeMX/CMake 工程目录是：
+STM32 CubeMX/CMake 工程目录：
 
 ```powershell
 C:\Users\mrg\Desktop\PMSMFocLib\YDrive\Board
 ```
 
-也就是说，执行 `cmake --preset Debug` 时必须进入 `Board` 目录，而不是仓库根目录。
+注意：`CMakePresets.json` 在 `Board` 目录里，所以执行 CMake 命令时要进入 `Board`。
 
 正确：
 
@@ -28,19 +28,18 @@ cd C:\Users\mrg\Desktop\PMSMFocLib\YDrive\Board
 
 ```powershell
 cd C:\Users\mrg\Desktop\PMSMFocLib\YDrive
+cmake --preset Debug
 ```
 
-如果在仓库根目录执行 CMake，会看到类似错误：
-
-```text
-CMake Error: Could not read presets from ...\YDrive: File not found
-```
-
-原因是 `CMakePresets.json` 在 `Board` 目录里，不在仓库根目录里。
-
-## 2. 需要安装的软件
+## 2. 需要自己安装的软件
 
 ### 2.1 STM32CubeMX
+
+用于打开和修改 `.ioc`：
+
+```powershell
+C:\Users\mrg\Desktop\PMSMFocLib\YDrive\Board\YDrive.ioc
+```
 
 当前工程使用：
 
@@ -49,21 +48,14 @@ STM32CubeMX v6.16.0
 STM32Cube FW_F4 V1.28.3
 ```
 
-CubeMX 用来打开和修改：
-
-```powershell
-C:\Users\mrg\Desktop\PMSMFocLib\YDrive\Board\YDrive.ioc
-```
-
-注意：修改 `.ioc` 后重新生成代码时，要确认 `USER CODE BEGIN/END` 中的用户代码没有被破坏。
-
-### 2.2 CMake
-
-推荐版本：
+如果新工程是 CubeMX 生成的，建议统一选择：
 
 ```text
-CMake 3.26.0 或更高
+Toolchain / IDE = CMake
+Generator = Ninja
 ```
+
+### 2.2 CMake
 
 检查命令：
 
@@ -71,7 +63,7 @@ CMake 3.26.0 或更高
 cmake --version
 ```
 
-示例输出：
+当前验证版本：
 
 ```text
 cmake version 3.26.0
@@ -79,15 +71,13 @@ cmake version 3.26.0
 
 ### 2.3 Ninja
 
-当前 `CMakePresets.json` 使用 Ninja 生成器。
-
 检查命令：
 
 ```powershell
 ninja --version
 ```
 
-示例输出：
+当前验证版本：
 
 ```text
 1.13.2
@@ -95,27 +85,62 @@ ninja --version
 
 ### 2.4 GNU Arm Embedded Toolchain
 
-当前验证过的版本：
+检查命令：
+
+```powershell
+arm-none-eabi-gcc --version
+arm-none-eabi-gdb --version
+```
+
+当前验证版本：
 
 ```text
 arm-none-eabi-gcc 10.3-2021.10
 ```
 
+需要把工具链的 `bin` 目录加入 Windows `PATH`，例如：
+
+```text
+D:\gcc-arm-none-eabi-10.3-2021.10\bin
+```
+
+### 2.5 OpenOCD
+
+用于 STLINK 烧录和调试。
+
 检查命令：
 
 ```powershell
-arm-none-eabi-gcc --version
+openocd --version
 ```
 
-示例输出：
+当前验证路径：
 
 ```text
-arm-none-eabi-gcc.exe (GNU Arm Embedded Toolchain 10.3-2021.10) 10.3.1
+D:\OpenOCD-20240916-0.12.0\bin\openocd.exe
 ```
 
-需要保证 `arm-none-eabi-gcc.exe` 所在目录已经加入 Windows `PATH`。
+需要把 OpenOCD 的 `bin` 目录加入 Windows `PATH`。
 
-## 3. 一次完整编译流程
+### 2.6 VSCode 扩展
+
+建议安装：
+
+```text
+C/C++
+CMake Tools
+Cortex-Debug
+```
+
+作用：
+
+```text
+C/C++         代码补全、跳转、诊断
+CMake Tools   配合 CMake 工程
+Cortex-Debug  使用 STLINK/OpenOCD 调试 Cortex-M
+```
+
+## 3. 命令行编译方法
 
 进入工程目录：
 
@@ -123,7 +148,7 @@ arm-none-eabi-gcc.exe (GNU Arm Embedded Toolchain 10.3-2021.10) 10.3.1
 cd C:\Users\mrg\Desktop\PMSMFocLib\YDrive\Board
 ```
 
-重新配置 CMake：
+第一次配置或清理后重新配置：
 
 ```powershell
 cmake --fresh --preset Debug
@@ -135,7 +160,7 @@ cmake --fresh --preset Debug
 cmake --build --preset Debug
 ```
 
-编译成功后，输出目录是：
+输出目录：
 
 ```powershell
 C:\Users\mrg\Desktop\PMSMFocLib\YDrive\Board\build\Debug
@@ -150,160 +175,404 @@ YDrive.hex
 YDrive.map
 ```
 
-其中：
-
-- `YDrive.elf`：调试用，包含符号信息
-- `YDrive.bin`：裸二进制固件，可用于烧录
-- `YDrive.hex`：Intel HEX 固件，也可用于烧录
-- `YDrive.map`：链接映射文件，用来查看 RAM/FLASH 占用和符号分布
-
-## 4. 为什么不手动 objcopy
-
-`Board/CMakeLists.txt` 已经加入了 post-build 规则：
-
-```cmake
-add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_OBJCOPY} -O ihex
-        $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
-        ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.hex
-    COMMAND ${CMAKE_OBJCOPY} -O binary
-        $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
-        ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.bin
-    COMMENT "Generating ${CMAKE_PROJECT_NAME}.hex and ${CMAKE_PROJECT_NAME}.bin"
-)
-```
-
-所以只要执行：
-
-```powershell
-cmake --build --preset Debug
-```
-
-就会自动生成 `.bin` 和 `.hex`。
-
-不要再使用旧工程的命令：
-
-```powershell
-arm-none-eabi-objcopy -O binary build/Debug/stm32F407IGT6.elf build/Debug/stm32F407IGT6.bin
-```
-
-这个命令不适合 YDrive，因为：
-
-- YDrive 的工程名是 `YDrive`
-- 输出文件是 `YDrive.elf`
-- 当前 MCU 是 `STM32F405RGTx`，不是 `STM32F407IGT6`
-
-如果确实要手动生成 `.bin`，正确命令是：
-
-```powershell
-cd C:\Users\mrg\Desktop\PMSMFocLib\YDrive\Board
-arm-none-eabi-objcopy -O binary build\Debug\YDrive.elf build\Debug\YDrive.bin
-```
-
-但正常情况下不需要手动执行。
-
-## 5. 常见问题
-
-### 5.1 CMake 找不到 preset
-
-现象：
+用途：
 
 ```text
-CMake Error: Could not read presets from C:/Users/mrg/Desktop/PMSMFocLib/YDrive: File not found
+YDrive.elf  调试用，包含符号信息
+YDrive.bin  裸二进制固件
+YDrive.hex  Intel HEX 固件
+YDrive.map  查看 FLASH/RAM 占用和符号分布
 ```
 
-原因：
+## 4. 新工程在 VSCode 中需要写哪些配置
+
+如果是一个新的 STM32 CMake 工程，建议自己维护 `.vscode` 下的三个文件：
 
 ```text
-当前目录错了。
+.vscode/tasks.json
+.vscode/launch.json
+.vscode/c_cpp_properties.json
 ```
 
-解决：
+### 4.1 tasks.json
 
-```powershell
-cd C:\Users\mrg\Desktop\PMSMFocLib\YDrive\Board
-cmake --fresh --preset Debug
-cmake --build --preset Debug
-```
+需要自己写。
 
-### 5.2 找不到 elf 文件
-
-现象：
+用途：
 
 ```text
-arm-none-eabi-objcopy.exe: 'build/Debug/stm32F407IGT6.elf': No such file
+配置 Debug
+编译 Debug
+探测 STLINK
+烧录固件
 ```
 
-原因：
+YDrive 当前任务：
 
 ```text
-文件名写错了。YDrive 生成的是 YDrive.elf。
+YDrive: configure Debug
+YDrive: build Debug
+YDrive: probe STLINK
+YDrive: flash with STLINK
 ```
 
-解决：
+关键点：
+
+```json
+"cwd": "${workspaceFolder}/Board"
+```
+
+因为 CMake 工程在 `Board`，不是仓库根目录。
+
+烧录任务核心命令：
 
 ```powershell
-cd C:\Users\mrg\Desktop\PMSMFocLib\YDrive\Board
-cmake --build --preset Debug
+openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c "adapter speed 1000" -c "program build/Debug/YDrive.elf verify reset exit"
 ```
 
-编译后查看：
+新工程需要改：
 
-```powershell
-dir build\Debug\YDrive.*
+```text
+工程目录
+elf 文件名
+target 配置，例如 stm32f4x.cfg / stm32g4x.cfg / stm32h7x.cfg
 ```
 
-### 5.3 PowerShell 显示中文乱码
+### 4.2 launch.json
 
-如果 PowerShell 中查看中文 Markdown 出现乱码，可以先切换 UTF-8：
+需要自己写。
 
-```powershell
-chcp 65001
+用途：
+
+```text
+让 VSCode 用 Cortex-Debug + OpenOCD + STLINK 调试 MCU
 ```
 
-这只影响终端显示，不代表文件内容损坏。GitHub 和 VSCode 通常会按 UTF-8 正常显示。
+YDrive 当前调试配置：
 
-## 6. 推荐 VSCode 使用方式
+```text
+YDrive: Debug STLINK/OpenOCD
+```
 
-用 VSCode 打开仓库根目录：
+关键字段：
+
+```json
+"type": "cortex-debug",
+"servertype": "openocd",
+"executable": "${workspaceFolder}/Board/build/Debug/YDrive.elf",
+"configFiles": [
+    "interface/stlink.cfg",
+    "target/stm32f4x.cfg"
+],
+"runToEntryPoint": "main",
+"preLaunchTask": "YDrive: build Debug"
+```
+
+新工程需要改：
+
+```text
+name
+executable
+device
+target/*.cfg
+preLaunchTask
+```
+
+是否一定要写 `launch.json`：
+
+```text
+只编译/烧录：不一定需要
+要在 VSCode 里 F5 调试、断点、单步：需要
+```
+
+### 4.3 c_cpp_properties.json
+
+建议自己写。
+
+用途：
+
+```text
+让 VSCode IntelliSense 知道芯片宏、HAL/CMSIS/FreeRTOS include 路径和交叉编译器
+```
+
+如果不写，常见现象：
+
+```text
+__IO 未定义
+RCC_CR_HSEON 未定义
+TIM14 未定义
+FLASH_LATENCY_5 未定义
+代码能编译，但 VSCode 红线很多
+```
+
+YDrive 需要的关键宏：
+
+```json
+"defines": [
+    "USE_HAL_DRIVER",
+    "STM32F405xx",
+    "DEBUG"
+]
+```
+
+YDrive 需要的关键 include：
+
+```text
+MotorControl
+Board/Core/Inc
+Board/Drivers/STM32F4xx_HAL_Driver/Inc
+Board/Drivers/STM32F4xx_HAL_Driver/Inc/Legacy
+Board/Drivers/CMSIS/Device/ST/STM32F4xx/Include
+Board/Drivers/CMSIS/Include
+Board/Middlewares/Third_Party/FreeRTOS/Source/include
+Board/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2
+Board/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F
+Board/Middlewares/ST/STM32_USB_Device_Library/Core/Inc
+Board/Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc
+```
+
+修改后可以在 VSCode 执行：
+
+```text
+Ctrl+Shift+P
+C/C++: Reset IntelliSense Database
+```
+
+## 5. VSCode 中如何编译运行
+
+打开仓库根目录：
 
 ```powershell
 code C:\Users\mrg\Desktop\PMSMFocLib\YDrive
 ```
 
-编译时可以打开终端，进入 `Board`：
+编译：
+
+```text
+Terminal -> Run Task -> YDrive: build Debug
+```
+
+探测 STLINK：
+
+```text
+Terminal -> Run Task -> YDrive: probe STLINK
+```
+
+烧录：
+
+```text
+Terminal -> Run Task -> YDrive: flash with STLINK
+```
+
+调试：
+
+```text
+Run and Debug -> YDrive: Debug STLINK/OpenOCD -> F5
+```
+
+如果只想用命令行，不用 VSCode 任务，也可以直接执行：
 
 ```powershell
-cd Board
+cd C:\Users\mrg\Desktop\PMSMFocLib\YDrive\Board
+cmake --build --preset Debug
+openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c "adapter speed 1000" -c "program build/Debug/YDrive.elf verify reset exit"
+```
+
+## 6. STLINK 接线与常见连接问题
+
+最少接线：
+
+```text
+STLINK SWDIO  -> MCU SWDIO
+STLINK SWCLK  -> MCU SWCLK / SWC
+STLINK GND    -> 目标板 GND
+STLINK VTref  -> 目标板 3.3V
+```
+
+目标板需要稳定 3.3V。
+
+OpenOCD 正常连接时会看到：
+
+```text
+Target voltage: 3.xxx
+target halted
+```
+
+如果看到：
+
+```text
+target voltage may be too low
+init mode failed
+```
+
+优先检查：
+
+```text
+目标板 3.3V 是否正常
+STLINK GND 是否和目标板 GND 共地
+STLINK VTref 是否接到目标板 3.3V
+SWDIO/SWCLK 是否接反
+```
+
+## 7. 新工程移植时要改哪里
+
+如果新建一个 STM32 CMake 工程，通常需要检查这些地方：
+
+```text
+Board/CMakePresets.json
+Board/CMakeLists.txt
+Board/cmake/gcc-arm-none-eabi.cmake
+Board/cmake/stm32cubemx/CMakeLists.txt
+.vscode/tasks.json
+.vscode/launch.json
+.vscode/c_cpp_properties.json
+```
+
+重点确认：
+
+```text
+工程名是否正确
+输出 elf 文件名是否正确
+linker script 是否匹配芯片
+芯片宏是否正确，例如 STM32F405xx
+OpenOCD target cfg 是否正确
+includePath 是否包含 HAL/CMSIS/FreeRTOS/USB
+```
+
+## 8. 需要自己维护的文档
+
+建议每个工程都维护这些文档。
+
+### 8.1 环境与编译文档
+
+文件：
+
+```text
+Docs/environment_and_build.md
+```
+
+记录：
+
+```text
+软件版本
+工具链路径
+CMake/Ninja 使用方法
+VSCode tasks.json/launch.json/c_cpp_properties.json 说明
+烧录和 Debug 方法
+常见环境问题
+```
+
+### 8.2 CubeMX 与硬件配置文档
+
+建议文件：
+
+```text
+Docs/ydrive_cubemx_and_plan.md
+```
+
+记录：
+
+```text
+MCU 型号
+时钟树
+GPIO 分配
+TIM/ADC/SPI/UART/USB 配置
+FreeRTOS 配置
+重要引脚说明
+```
+
+每次修改 `.ioc` 或重新生成代码后，要同步更新。
+
+### 8.3 控制时序文档
+
+建议文件：
+
+```text
+Docs/ODrive_motor0_timing_notes.md
+```
+
+记录：
+
+```text
+参考工程的控制时序
+TIM/ADC/中断/线程之间的关系
+关键回调函数
+控制环执行顺序
+后续要复刻或简化的内容
+```
+
+### 8.4 Bring-up 实验记录
+
+建议新增：
+
+```text
+Docs/bringup_log.md
+```
+
+记录：
+
+```text
+日期
+固件版本或改动说明
+接线方式
+供电方式
+烧录结果
+调试现象
+示波器观察结果
+遇到的问题
+下一步计划
+```
+
+硬件调试很依赖现场状态，这份日志后面会非常有用。
+
+## 9. 常见问题
+
+### 9.1 CMake 找不到 preset
+
+现象：
+
+```text
+CMake Error: Could not read presets from ...\YDrive: File not found
+```
+
+原因：
+
+```text
+当前目录错了。CMakePresets.json 在 Board 目录。
+```
+
+解决：
+
+```powershell
+cd C:\Users\mrg\Desktop\PMSMFocLib\YDrive\Board
 cmake --fresh --preset Debug
 cmake --build --preset Debug
 ```
 
-调试时使用：
+### 9.2 VSCode 报 __IO 未定义
+
+原因：
 
 ```text
-Board\build\Debug\YDrive.elf
+IntelliSense 没读到 CMSIS include 路径或芯片宏。
 ```
 
-烧录时使用：
+解决：
 
 ```text
-Board\build\Debug\YDrive.bin
+检查 .vscode/c_cpp_properties.json
+确认定义了 STM32F405xx 和 USE_HAL_DRIVER
+确认 includePath 包含 Drivers/CMSIS/Include
+确认 includePath 包含 Drivers/CMSIS/Device/ST/STM32F4xx/Include
+执行 C/C++: Reset IntelliSense Database
 ```
 
-## 7. 当前启动验证目标
+### 9.3 能编译但 VSCode 红线很多
 
-当前固件阶段只验证基础系统：
+优先相信：
 
-- 能编译
-- 能下载
-- 能调试进入 `main()`
-- FreeRTOS `defaultTask` 跑起来
-- USB CDC 输出 `YDrive boot`
-- USB CDC 枚举成功
-- 周期读取 `nFAULT`
-- `PB12 EN_GATE` 默认保持 LOW
+```powershell
+cmake --build --preset Debug
+```
 
-这一阶段不要启动电机功率输出，不要拉高 `EN_GATE`。
-
-
+如果命令行编译通过，而 VSCode 仍然报红线，大概率是 IntelliSense 配置问题，不是工程编译问题。

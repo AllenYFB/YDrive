@@ -22,10 +22,12 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "pwm_adc.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN TD */
+typedef void (*ADC_handler_t)(ADC_HandleTypeDef *hadc, uint8_t injected);
 
 /* USER CODE END TD */
 
@@ -51,6 +53,22 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void ADC_IRQ_Dispatch(ADC_HandleTypeDef *hadc, ADC_handler_t callback)
+{
+  uint32_t jeoc = __HAL_ADC_GET_FLAG(hadc, ADC_FLAG_JEOC);
+  uint32_t jeoc_it_en = __HAL_ADC_GET_IT_SOURCE(hadc, ADC_IT_JEOC);
+  if ((jeoc != 0U) && (jeoc_it_en != 0U)) {
+    callback(hadc, 1U);
+    __HAL_ADC_CLEAR_FLAG(hadc, (ADC_FLAG_JSTRT | ADC_FLAG_JEOC));
+  }
+
+  uint32_t eoc = __HAL_ADC_GET_FLAG(hadc, ADC_FLAG_EOC);
+  uint32_t eoc_it_en = __HAL_ADC_GET_IT_SOURCE(hadc, ADC_IT_EOC);
+  if ((eoc != 0U) && (eoc_it_en != 0U)) {
+    callback(hadc, 0U);
+    __HAL_ADC_CLEAR_FLAG(hadc, (ADC_FLAG_STRT | ADC_FLAG_EOC));
+  }
+}
 
 /* USER CODE END 0 */
 
@@ -170,6 +188,10 @@ void DebugMon_Handler(void)
 void ADC_IRQHandler(void)
 {
   /* USER CODE BEGIN ADC_IRQn 0 */
+  ADC_IRQ_Dispatch(&hadc1, pwm_adc_vbus_sense_adc_cb);
+  ADC_IRQ_Dispatch(&hadc2, pwm_adc_trig_adc_cb);
+  ADC_IRQ_Dispatch(&hadc3, pwm_adc_trig_adc_cb);
+  return;
 
   /* USER CODE END ADC_IRQn 0 */
   HAL_ADC_IRQHandler(&hadc1);

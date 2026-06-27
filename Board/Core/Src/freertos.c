@@ -25,6 +25,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdio.h>
+#include <string.h>
+#include "control_loop.h"
+#include "pwm_adc.h"
 #include "usbd_cdc_if.h"
 
 /* USER CODE END Includes */
@@ -54,6 +58,12 @@ const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for controlLoopTask */
+const osThreadAttr_t controlLoopTask_attributes = {
+  .name = "ctrlLoop",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -98,6 +108,7 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  controlLoopTaskHandle = osThreadNew(ControlLoopTask, NULL, &controlLoopTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -119,24 +130,52 @@ void StartDefaultTask(void *argument)
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
   const uint8_t boot_msg[] = "YDrive boot\r\n";
-  const uint8_t nfault_ok_msg[] = "nFAULT=1 OK\r\n";
-  const uint8_t nfault_fault_msg[] = "nFAULT=0 FAULT\r\n";
+  char msg[192];
 
   HAL_GPIO_WritePin(EN_GATE_GPIO_Port, EN_GATE_Pin, GPIO_PIN_RESET);
   osDelay(1000);
   CDC_Transmit_FS((uint8_t *)boot_msg, sizeof(boot_msg) - 1U);
+  pwm_adc_init();
+  pwm_adc_start_timing();
 
   /* Infinite loop */
   for(;;)
   {
     GPIO_PinState nfault_state = HAL_GPIO_ReadPin(nFAULT_GPIO_Port, nFAULT_Pin);
+    static uint32_t last_adc_count = 0;
+    static uint32_t last_current_count = 0;
+    PwmAdcStatus pwm_adc_status;
+    ControlLoopStatus control_status;
 
     HAL_GPIO_WritePin(EN_GATE_GPIO_Port, EN_GATE_Pin, GPIO_PIN_RESET);
+    pwm_adc_get_status(&pwm_adc_status);
+    control_loop_get_status(&control_status);
 
-    if (nfault_state == GPIO_PIN_SET) {
-      CDC_Transmit_FS((uint8_t *)nfault_ok_msg, sizeof(nfault_ok_msg) - 1U);
-    } else {
-      CDC_Transmit_FS((uint8_t *)nfault_fault_msg, sizeof(nfault_fault_msg) - 1U);
+    uint32_t adc_hz = pwm_adc_status.adc_irq_count - last_adc_count;
+    uint32_t current_hz = pwm_adc_status.current_meas_count - last_current_count;
+    last_adc_count = pwm_adc_status.adc_irq_count;
+    last_current_count = pwm_adc_status.current_meas_count;
+
+    int len = snprintf(msg, sizeof(msg),
+                       "nFAULT=%u adc_irq=%lu current=%lu dc_cal=%lu dir=%u axis=%lu cal=%u vbus=%lu ib=%lu ic=%lu off_b=%ld off_c=%ld ia=%ld ibc=%ld icc=%ld\r\n",
+                       (nfault_state == GPIO_PIN_SET) ? 1U : 0U,
+                       (unsigned long)adc_hz,
+                       (unsigned long)current_hz,
+                       (unsigned long)pwm_adc_status.dc_cal_count,
+                       pwm_adc_status.counting_down,
+                       (unsigned long)control_status.loop_count,
+                       pwm_adc_status.offset_calibrated,
+                       (unsigned long)pwm_adc_status.vbus_raw,
+                       (unsigned long)pwm_adc_status.ib_raw,
+                       (unsigned long)pwm_adc_status.ic_raw,
+                       (long)pwm_adc_status.ib_offset,
+                       (long)pwm_adc_status.ic_offset,
+                       (long)control_status.latest_ia,
+                       (long)control_status.latest_ib,
+                       (long)control_status.latest_ic);
+
+    if (len > 0) {
+      CDC_Transmit_FS((uint8_t *)msg, (uint16_t)strlen(msg));
     }
 
     osDelay(1000);

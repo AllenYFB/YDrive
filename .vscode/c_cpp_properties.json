@@ -1,0 +1,32 @@
+{
+    "version": 4,
+    "configurations": [
+        {
+            "name": "YDrive STM32F405",
+            "compilerPath": "D:/gcc-arm-none-eabi-10.3-2021.10/bin/arm-none-eabi-gcc.exe",
+            "intelliSenseMode": "gcc-arm",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "defines": [
+                "USE_HAL_DRIVER",
+                "STM32F405xx",
+                "DEBUG"
+            ],
+            "includePath": [
+                "${workspaceFolder}/MotorControl",
+                "${workspaceFolder}/Board/Core/Inc",
+                "${workspaceFolder}/Board/USB_DEVICE/App",
+                "${workspaceFolder}/Board/USB_DEVICE/Target",
+                "${workspaceFolder}/Board/Drivers/STM32F4xx_HAL_Driver/Inc",
+                "${workspaceFolder}/Board/Drivers/STM32F4xx_HAL_Driver/Inc/Legacy",
+                "${workspaceFolder}/Board/Drivers/CMSIS/Device/ST/STM32F4xx/Include",
+                "${workspaceFolder}/Board/Drivers/CMSIS/Include",
+                "${workspaceFolder}/Board/Middlewares/Third_Party/FreeRTOS/Source/include",
+                "${workspaceFolder}/Board/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2",
+                "${workspaceFolder}/Board/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F",
+                "${workspaceFolder}/Board/Middlewares/ST/STM32_USB_Device_Library/Core/Inc",
+                "${workspaceFolder}/Board/Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc"
+            ]
+        }
+    ]
+}

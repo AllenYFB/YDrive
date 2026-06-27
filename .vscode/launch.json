@@ -1,0 +1,24 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "YDrive: Debug STLINK/OpenOCD",
+            "type": "cortex-debug",
+            "request": "launch",
+            "servertype": "openocd",
+            "cwd": "${workspaceFolder}/Board",
+            "executable": "${workspaceFolder}/Board/build/Debug/YDrive.elf",
+            "device": "STM32F405RG",
+            "configFiles": [
+                "interface/stlink.cfg",
+                "target/stm32f4x.cfg"
+            ],
+            "runToEntryPoint": "main",
+            "preLaunchTask": "YDrive: build Debug",
+            "serverArgs": [
+                "-c",
+                "adapter speed 1000"
+            ]
+        }
+    ]
+}
