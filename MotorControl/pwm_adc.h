@@ -29,7 +29,9 @@ typedef struct {
 
 void pwm_adc_init(void);
 void pwm_adc_start_timing(void);
+void pwm_adc_set_gate_enabled(uint32_t enable);
 void pwm_adc_write_pwm_neutral(void);
+void pwm_adc_write_pwm_ticks(uint32_t phase_a_ticks, uint32_t phase_b_ticks, uint32_t phase_c_ticks);
 void pwm_adc_get_phase_current_sample(PhaseCurrentSample *sample);
 void pwm_adc_get_status(PwmAdcStatus *status);
 void pwm_adc_vbus_sense_adc_cb(ADC_HandleTypeDef *hadc, uint8_t injected);

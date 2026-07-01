@@ -16,6 +16,13 @@ typedef struct {
     int32_t latest_ia;
     int32_t latest_ib;
     int32_t latest_ic;
+    uint32_t open_loop_enable;
+    float open_loop_phase;
+    float open_loop_phase_vel;
+    float open_loop_voltage;
+    uint32_t pwm_a;
+    uint32_t pwm_b;
+    uint32_t pwm_c;
 } ControlLoopStatus;
 
 extern osThreadId_t controlLoopTaskHandle;

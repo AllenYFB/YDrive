@@ -5,8 +5,11 @@
 #include "gpio.h"
 #include "main.h"
 #include "tim.h"
+#include "utils.h"
 
-#define PWM_NEUTRAL_TICKS 1750U
+#define PWM_CENTER_TICKS 1750U
+#define PWM_MIN_TICKS 1U
+#define PWM_MAX_TICKS 3499U
 #define DC_CAL_FILTER_SHIFT 8U
 #define DC_CAL_READY_SAMPLES 2048U
 
@@ -19,20 +22,34 @@ static int32_t ic_offset_q8;
 
 void pwm_adc_init(void)
 {
-    HAL_GPIO_WritePin(EN_GATE_GPIO_Port, EN_GATE_Pin, GPIO_PIN_RESET);
+    pwm_adc_set_gate_enabled(0U);
     pwm_adc_write_pwm_neutral();
 }
 
 void pwm_adc_write_pwm_neutral(void)
 {
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, PWM_NEUTRAL_TICKS);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, PWM_NEUTRAL_TICKS);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, PWM_NEUTRAL_TICKS);
+    pwm_adc_write_pwm_ticks(PWM_CENTER_TICKS, PWM_CENTER_TICKS, PWM_CENTER_TICKS);
+}
+
+void pwm_adc_set_gate_enabled(uint32_t enable)
+{
+    HAL_GPIO_WritePin(EN_GATE_GPIO_Port, EN_GATE_Pin,
+                      (enable != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+void pwm_adc_write_pwm_ticks(uint32_t phase_a_ticks, uint32_t phase_b_ticks, uint32_t phase_c_ticks)
+{
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1,
+                          CLAMP(phase_a_ticks, PWM_MIN_TICKS, PWM_MAX_TICKS));
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2,
+                          CLAMP(phase_b_ticks, PWM_MIN_TICKS, PWM_MAX_TICKS));
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3,
+                          CLAMP(phase_c_ticks, PWM_MIN_TICKS, PWM_MAX_TICKS));
 }
 
 void pwm_adc_start_timing(void)
 {
-    HAL_GPIO_WritePin(EN_GATE_GPIO_Port, EN_GATE_Pin, GPIO_PIN_RESET);
+    pwm_adc_set_gate_enabled(0U);
     pwm_adc_write_pwm_neutral();
 
     (void)HAL_ADCEx_InjectedStart_IT(&hadc1);
