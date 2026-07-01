@@ -8,6 +8,9 @@
 extern "C" {
 #endif
 
+#define PWM_PERIOD_TICKS 3500U
+#define PWM_CENTER_TICKS 1750U
+
 typedef struct {
     uint32_t adc_irq_count;
     uint32_t current_meas_count;
@@ -27,10 +30,17 @@ typedef struct {
     int32_t ic;
 } PhaseCurrentSample;
 
+typedef struct {
+    uint32_t phase_a;
+    uint32_t phase_b;
+    uint32_t phase_c;
+} PwmTicks;
+
 void pwm_adc_init(void);
 void pwm_adc_start_timing(void);
 void pwm_adc_set_gate_enabled(uint32_t enable);
 void pwm_adc_write_pwm_neutral(void);
+void pwm_adc_write_pwm(const PwmTicks *pwm);
 void pwm_adc_write_pwm_ticks(uint32_t phase_a_ticks, uint32_t phase_b_ticks, uint32_t phase_c_ticks);
 void pwm_adc_get_phase_current_sample(PhaseCurrentSample *sample);
 void pwm_adc_get_status(PwmAdcStatus *status);

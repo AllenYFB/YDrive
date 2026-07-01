@@ -42,13 +42,6 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/stm32f4xx_hal_timebase_tim.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/sysmem.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/syscalls.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../MotorControl/arm_cos_f32.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../MotorControl/control_loop.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../MotorControl/foc.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../MotorControl/open_loop_controller.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../MotorControl/pwm_adc.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../MotorControl/usb_command.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../MotorControl/utils.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../startup_stm32f405xx.s
 )
 

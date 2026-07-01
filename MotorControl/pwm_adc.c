@@ -7,18 +7,29 @@
 #include "tim.h"
 #include "utils.h"
 
-#define PWM_CENTER_TICKS 1750U
 #define PWM_MIN_TICKS 1U
 #define PWM_MAX_TICKS 3499U
 #define DC_CAL_FILTER_SHIFT 8U
 #define DC_CAL_READY_SAMPLES 2048U
 
-static volatile PwmAdcStatus pwm_adc_status;
-static volatile PhaseCurrentSample latest_phase_current;
-static volatile uint8_t ib_raw_ready;
-static volatile uint8_t ic_raw_ready;
-static int32_t ib_offset_q8;
-static int32_t ic_offset_q8;
+typedef struct {
+    volatile PwmAdcStatus status;
+    volatile PhaseCurrentSample latest_current;
+    volatile uint8_t ib_raw_ready;
+    volatile uint8_t ic_raw_ready;
+    int32_t ib_offset_q8;
+    int32_t ic_offset_q8;
+} PwmAdc;
+
+static PwmAdc pwm_adc;
+
+static uint8_t pwm_adc_is_counting_down(void);
+static uint8_t pwm_adc_read_phase_current_raw(ADC_HandleTypeDef *hadc);
+static void pwm_adc_handle_current_window(ADC_HandleTypeDef *hadc);
+static void pwm_adc_handle_dc_cal_window(ADC_HandleTypeDef *hadc);
+static void pwm_adc_update_offset_filter(volatile int32_t *offset,
+                                         int32_t *offset_q8,
+                                         uint32_t raw_adc);
 
 void pwm_adc_init(void)
 {
@@ -31,6 +42,15 @@ void pwm_adc_write_pwm_neutral(void)
     pwm_adc_write_pwm_ticks(PWM_CENTER_TICKS, PWM_CENTER_TICKS, PWM_CENTER_TICKS);
 }
 
+void pwm_adc_write_pwm(const PwmTicks *pwm)
+{
+    if (pwm == 0) {
+        return;
+    }
+
+    pwm_adc_write_pwm_ticks(pwm->phase_a, pwm->phase_b, pwm->phase_c);
+}
+
 void pwm_adc_set_gate_enabled(uint32_t enable)
 {
     HAL_GPIO_WritePin(EN_GATE_GPIO_Port, EN_GATE_Pin,
@@ -40,11 +60,11 @@ void pwm_adc_set_gate_enabled(uint32_t enable)
 void pwm_adc_write_pwm_ticks(uint32_t phase_a_ticks, uint32_t phase_b_ticks, uint32_t phase_c_ticks)
 {
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1,
-                          CLAMP(phase_a_ticks, PWM_MIN_TICKS, PWM_MAX_TICKS));
+                          clamp_u32(phase_a_ticks, PWM_MIN_TICKS, PWM_MAX_TICKS));
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2,
-                          CLAMP(phase_b_ticks, PWM_MIN_TICKS, PWM_MAX_TICKS));
+                          clamp_u32(phase_b_ticks, PWM_MIN_TICKS, PWM_MAX_TICKS));
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3,
-                          CLAMP(phase_c_ticks, PWM_MIN_TICKS, PWM_MAX_TICKS));
+                          clamp_u32(phase_c_ticks, PWM_MIN_TICKS, PWM_MAX_TICKS));
 }
 
 void pwm_adc_start_timing(void)
@@ -71,7 +91,7 @@ void pwm_adc_get_phase_current_sample(PhaseCurrentSample *sample)
     }
 
     __disable_irq();
-    *sample = latest_phase_current;
+    *sample = pwm_adc.latest_current;
     __enable_irq();
 }
 
@@ -81,7 +101,7 @@ void pwm_adc_get_status(PwmAdcStatus *status)
         return;
     }
 
-    *status = pwm_adc_status;
+    *status = pwm_adc.status;
 }
 
 void pwm_adc_vbus_sense_adc_cb(ADC_HandleTypeDef *hadc, uint8_t injected)
@@ -90,8 +110,8 @@ void pwm_adc_vbus_sense_adc_cb(ADC_HandleTypeDef *hadc, uint8_t injected)
         return;
     }
 
-    pwm_adc_status.adc_irq_count++;
-    pwm_adc_status.vbus_raw = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+    pwm_adc.status.adc_irq_count++;
+    pwm_adc.status.vbus_raw = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
 }
 
 void pwm_adc_trig_adc_cb(ADC_HandleTypeDef *hadc, uint8_t injected)
@@ -100,56 +120,91 @@ void pwm_adc_trig_adc_cb(ADC_HandleTypeDef *hadc, uint8_t injected)
         return;
     }
 
-    pwm_adc_status.adc_irq_count++;
+    pwm_adc.status.adc_irq_count++;
+    pwm_adc.status.counting_down = pwm_adc_is_counting_down();
 
-    uint8_t counting_down = ((htim1.Instance->CR1 & TIM_CR1_DIR) != 0U) ? 1U : 0U;
-    uint8_t current_meas_not_dc_cal = (counting_down == 0U) ? 1U : 0U;
-    pwm_adc_status.counting_down = counting_down;
-
-    if (hadc->Instance == ADC2) {
-        pwm_adc_status.ib_raw = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
-    } else if (hadc->Instance == ADC3) {
-        pwm_adc_status.ic_raw = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
-    } else {
+    if (pwm_adc_read_phase_current_raw(hadc) == 0U) {
         return;
     }
 
-    if (current_meas_not_dc_cal != 0U) {
-        if (hadc->Instance == ADC2) {
-            latest_phase_current.ib = (int32_t)pwm_adc_status.ib_raw - pwm_adc_status.ib_offset;
-            ib_raw_ready = 1U;
-            return;
-        } else if (hadc->Instance == ADC3) {
-            latest_phase_current.ic = (int32_t)pwm_adc_status.ic_raw - pwm_adc_status.ic_offset;
-            ic_raw_ready = 1U;
-        }
-
-        if ((ib_raw_ready == 0U) || (ic_raw_ready == 0U)) {
-            return;
-        }
-
-        ib_raw_ready = 0U;
-        ic_raw_ready = 0U;
-
-        latest_phase_current.ia = -latest_phase_current.ib - latest_phase_current.ic;
-
-        pwm_adc_status.current_meas_count++;
-        control_loop_signal_current_meas_from_isr();
+    if (pwm_adc.status.counting_down == 0U) {
+        pwm_adc_handle_current_window(hadc);
     } else {
-        if (hadc->Instance == ADC2) {
-            int32_t target_q8 = (int32_t)pwm_adc_status.ib_raw << DC_CAL_FILTER_SHIFT;
-            ib_offset_q8 += (target_q8 - ib_offset_q8) >> DC_CAL_FILTER_SHIFT;
-            pwm_adc_status.ib_offset = ib_offset_q8 >> DC_CAL_FILTER_SHIFT;
-        } else if (hadc->Instance == ADC3) {
-            int32_t target_q8 = (int32_t)pwm_adc_status.ic_raw << DC_CAL_FILTER_SHIFT;
-            ic_offset_q8 += (target_q8 - ic_offset_q8) >> DC_CAL_FILTER_SHIFT;
-            pwm_adc_status.ic_offset = ic_offset_q8 >> DC_CAL_FILTER_SHIFT;
-        }
-
-        if (pwm_adc_status.dc_cal_count < DC_CAL_READY_SAMPLES) {
-            pwm_adc_status.dc_cal_count++;
-        } else {
-            pwm_adc_status.offset_calibrated = 1U;
-        }
+        pwm_adc_handle_dc_cal_window(hadc);
     }
+}
+
+static uint8_t pwm_adc_is_counting_down(void)
+{
+    return ((htim1.Instance->CR1 & TIM_CR1_DIR) != 0U) ? 1U : 0U;
+}
+
+static uint8_t pwm_adc_read_phase_current_raw(ADC_HandleTypeDef *hadc)
+{
+    uint32_t raw_adc = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+
+    if (hadc->Instance == ADC2) {
+        pwm_adc.status.ib_raw = raw_adc;
+        return 1U;
+    }
+
+    if (hadc->Instance == ADC3) {
+        pwm_adc.status.ic_raw = raw_adc;
+        return 1U;
+    }
+
+    return 0U;
+}
+
+static void pwm_adc_handle_current_window(ADC_HandleTypeDef *hadc)
+{
+    if (hadc->Instance == ADC2) {
+        pwm_adc.latest_current.ib = (int32_t)pwm_adc.status.ib_raw - pwm_adc.status.ib_offset;
+        pwm_adc.ib_raw_ready = 1U;
+        return;
+    }
+
+    if (hadc->Instance == ADC3) {
+        pwm_adc.latest_current.ic = (int32_t)pwm_adc.status.ic_raw - pwm_adc.status.ic_offset;
+        pwm_adc.ic_raw_ready = 1U;
+    }
+
+    if ((pwm_adc.ib_raw_ready == 0U) || (pwm_adc.ic_raw_ready == 0U)) {
+        return;
+    }
+
+    pwm_adc.ib_raw_ready = 0U;
+    pwm_adc.ic_raw_ready = 0U;
+    pwm_adc.latest_current.ia = -pwm_adc.latest_current.ib - pwm_adc.latest_current.ic;
+
+    pwm_adc.status.current_meas_count++;
+    control_loop_signal_current_meas_from_isr();
+}
+
+static void pwm_adc_handle_dc_cal_window(ADC_HandleTypeDef *hadc)
+{
+    if (hadc->Instance == ADC2) {
+        pwm_adc_update_offset_filter(&pwm_adc.status.ib_offset,
+                                     &pwm_adc.ib_offset_q8,
+                                     pwm_adc.status.ib_raw);
+    } else if (hadc->Instance == ADC3) {
+        pwm_adc_update_offset_filter(&pwm_adc.status.ic_offset,
+                                     &pwm_adc.ic_offset_q8,
+                                     pwm_adc.status.ic_raw);
+    }
+
+    if (pwm_adc.status.dc_cal_count < DC_CAL_READY_SAMPLES) {
+        pwm_adc.status.dc_cal_count++;
+    } else {
+        pwm_adc.status.offset_calibrated = 1U;
+    }
+}
+
+static void pwm_adc_update_offset_filter(volatile int32_t *offset,
+                                         int32_t *offset_q8,
+                                         uint32_t raw_adc)
+{
+    int32_t target_q8 = (int32_t)raw_adc << DC_CAL_FILTER_SHIFT;
+    *offset_q8 += (target_q8 - *offset_q8) >> DC_CAL_FILTER_SHIFT;
+    *offset = *offset_q8 >> DC_CAL_FILTER_SHIFT;
 }

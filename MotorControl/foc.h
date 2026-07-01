@@ -5,8 +5,7 @@
 
 #include "utils.h"
 
-#define FOC_PWM_PERIOD_TICKS 3500U
-#define FOC_PWM_CENTER_TICKS 1750U
+#define FOC_ERROR_MODULATION_MAGNITUDE (1UL << 0)
 
 typedef struct {
     uint32_t pwm_a;
@@ -15,9 +14,13 @@ typedef struct {
     float mod_alpha;
     float mod_beta;
     uint32_t error;
-} FocStatus;
+} FocController;
 
-void foc_voltage(float v_d, float v_q, float pwm_phase);
-void foc_get_status(FocStatus *status);
+void foc_controller_init(FocController *controller);
+uint32_t foc_controller_apply_voltage(FocController *controller,
+                                      float v_d,
+                                      float v_q,
+                                      float pwm_phase);
+void foc_controller_get_status(const FocController *controller, FocController *status);
 
 #endif

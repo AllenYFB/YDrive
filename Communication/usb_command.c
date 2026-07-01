@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "open_loop_controller.h"
+#include "control_loop.h"
 #include "usbd_cdc_if.h"
 
 static void usb_command_send(const char *msg);
@@ -40,21 +40,21 @@ void usb_command_receive(const uint8_t *data, uint32_t length)
 static void usb_command_handle_line(char *line)
 {
     float voltage;
-    float velocity;
+    float electrical_phase_vel;
     char *args;
 
     if (strncmp(line, "open", 4U) == 0) {
         args = line + 4;
         if ((parse_float_arg(&args, &voltage) != 0U) &&
-            (parse_float_arg(&args, &velocity) != 0U)) {
+            (parse_float_arg(&args, &electrical_phase_vel) != 0U)) {
             args = skip_spaces(args);
             if (*args != '\0') {
                 usb_command_send("ERR open args\r\n");
                 return;
             }
 
-            open_loop_controller_set_target(voltage, velocity);
-            open_loop_controller_enable(1U);
+            control_loop_set_open_loop_target(voltage, electrical_phase_vel);
+            control_loop_set_open_loop_enabled(1U);
             usb_command_send("OK open\r\n");
             return;
         }
@@ -64,7 +64,7 @@ static void usb_command_handle_line(char *line)
     }
 
     if ((strcmp(line, "stop") == 0) || (strcmp(line, "idle") == 0)) {
-        open_loop_controller_enable(0U);
+        control_loop_set_open_loop_enabled(0U);
         usb_command_send("OK stop\r\n");
         return;
     }

@@ -3,23 +3,29 @@
 
 #include <stdint.h>
 
+#include "foc.h"
 #include "utils.h"
 
 typedef struct {
-    float max_voltage_ramp;
-    float max_phase_vel_ramp;
-    float target_voltage;
-    float target_phase_vel;
-    Float2D vdq_setpoint;
-    float phase;
-    float phase_vel;
+    float max_voltage_mod_ramp;
+    float max_electrical_phase_vel_ramp;
+    float target_voltage_mod;
+    float target_electrical_phase_vel;
+    Float2D voltage_dq;
+    float electrical_phase;
+    float electrical_phase_vel;
     uint32_t enabled;
-} OpenLoopStatus;
+} OpenLoopController;
 
-void open_loop_controller_init(void);
-void open_loop_controller_set_target(float voltage, float phase_vel);
-void open_loop_controller_enable(uint32_t enable);
-void open_loop_controller_update(float dt);
-void open_loop_controller_get_status(OpenLoopStatus *status);
+void open_loop_controller_init(OpenLoopController *controller);
+void open_loop_controller_set_target(OpenLoopController *controller,
+                                     float voltage_mod,
+                                     float electrical_phase_vel);
+void open_loop_controller_set_enabled(OpenLoopController *controller, uint32_t enable);
+uint32_t open_loop_controller_update(OpenLoopController *controller,
+                                     FocController *foc_controller,
+                                     float dt);
+void open_loop_controller_get_status(const OpenLoopController *controller,
+                                     OpenLoopController *status);
 
 #endif

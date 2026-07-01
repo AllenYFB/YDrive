@@ -1,71 +1,98 @@
 #include "open_loop_controller.h"
 
-#include "foc.h"
-
 #define OPEN_LOOP_DEFAULT_MAX_VOLTAGE_RAMP 0.5f
 #define OPEN_LOOP_DEFAULT_MAX_PHASE_VEL_RAMP 40.0f
 #define OPEN_LOOP_PWM_PHASE_ADVANCE_PERIODS 1.5f
 
-static volatile OpenLoopStatus open_loop_status;
-
-void open_loop_controller_init(void)
+void open_loop_controller_init(OpenLoopController *controller)
 {
-    open_loop_status.max_voltage_ramp = OPEN_LOOP_DEFAULT_MAX_VOLTAGE_RAMP;
-    open_loop_status.max_phase_vel_ramp = OPEN_LOOP_DEFAULT_MAX_PHASE_VEL_RAMP;
-    open_loop_status.target_voltage = 0.0f;
-    open_loop_status.target_phase_vel = 0.0f;
-    open_loop_status.vdq_setpoint.d = 0.0f;
-    open_loop_status.vdq_setpoint.q = 0.0f;
-    open_loop_status.phase = 0.0f;
-    open_loop_status.phase_vel = 0.0f;
-    open_loop_status.enabled = 0U;
-}
-
-void open_loop_controller_set_target(float voltage, float phase_vel)
-{
-    open_loop_status.target_voltage = CLAMP(voltage, 0.0f, 0.12f);
-    open_loop_status.target_phase_vel = CLAMP(phase_vel, -80.0f, 80.0f);
-}
-
-void open_loop_controller_enable(uint32_t enable)
-{
-    open_loop_status.enabled = (enable != 0U) ? 1U : 0U;
-    if (open_loop_status.enabled == 0U) {
-        open_loop_status.target_voltage = 0.0f;
-        open_loop_status.target_phase_vel = 0.0f;
-    }
-}
-
-void open_loop_controller_update(float dt)
-{
-    float prev_vd = open_loop_status.vdq_setpoint.d;
-    float prev_vel = open_loop_status.phase_vel;
-
-    if (open_loop_status.enabled == 0U) {
-        open_loop_status.target_voltage = 0.0f;
-        open_loop_status.target_phase_vel = 0.0f;
-    }
-
-    open_loop_status.vdq_setpoint.d = CLAMP(open_loop_status.target_voltage,
-                                            prev_vd - open_loop_status.max_voltage_ramp * dt,
-                                            prev_vd + open_loop_status.max_voltage_ramp * dt);
-    open_loop_status.vdq_setpoint.q = 0.0f;
-
-    open_loop_status.phase_vel = CLAMP(open_loop_status.target_phase_vel,
-                                       prev_vel - open_loop_status.max_phase_vel_ramp * dt,
-                                       prev_vel + open_loop_status.max_phase_vel_ramp * dt);
-    open_loop_status.phase = wrap_pm_pi(open_loop_status.phase + open_loop_status.phase_vel * dt);
-
-    float pwm_phase = wrap_pm_pi(open_loop_status.phase +
-                                 OPEN_LOOP_PWM_PHASE_ADVANCE_PERIODS * dt * open_loop_status.phase_vel);
-    foc_voltage(open_loop_status.vdq_setpoint.d, open_loop_status.vdq_setpoint.q, pwm_phase);
-}
-
-void open_loop_controller_get_status(OpenLoopStatus *status)
-{
-    if (status == 0) {
+    if (controller == 0) {
         return;
     }
 
-    *status = open_loop_status;
+    controller->max_voltage_mod_ramp = OPEN_LOOP_DEFAULT_MAX_VOLTAGE_RAMP;
+    controller->max_electrical_phase_vel_ramp = OPEN_LOOP_DEFAULT_MAX_PHASE_VEL_RAMP;
+    controller->target_voltage_mod = 0.0f;
+    controller->target_electrical_phase_vel = 0.0f;
+    controller->voltage_dq.d = 0.0f;
+    controller->voltage_dq.q = 0.0f;
+    controller->electrical_phase = 0.0f;
+    controller->electrical_phase_vel = 0.0f;
+    controller->enabled = 0U;
+}
+
+void open_loop_controller_set_target(OpenLoopController *controller,
+                                     float voltage_mod,
+                                     float electrical_phase_vel)
+{
+    if (controller == 0) {
+        return;
+    }
+
+    controller->target_voltage_mod = clamp_float(voltage_mod, 0.0f, 0.12f);
+    controller->target_electrical_phase_vel = clamp_float(electrical_phase_vel, -80.0f, 80.0f);
+}
+
+void open_loop_controller_set_enabled(OpenLoopController *controller, uint32_t enable)
+{
+    if (controller == 0) {
+        return;
+    }
+
+    controller->enabled = (enable != 0U) ? 1U : 0U;
+    if (controller->enabled == 0U) {
+        controller->target_voltage_mod = 0.0f;
+        controller->target_electrical_phase_vel = 0.0f;
+    }
+}
+
+uint32_t open_loop_controller_update(OpenLoopController *controller,
+                                     FocController *foc_controller,
+                                     float dt)
+{
+    if ((controller == 0) || (foc_controller == 0)) {
+        return 0U;
+    }
+
+    float prev_vd = controller->voltage_dq.d;
+    float prev_vel = controller->electrical_phase_vel;
+
+    if (controller->enabled == 0U) {
+        controller->target_voltage_mod = 0.0f;
+        controller->target_electrical_phase_vel = 0.0f;
+    }
+
+    controller->voltage_dq.d = clamp_float(controller->target_voltage_mod,
+                                           prev_vd - controller->max_voltage_mod_ramp * dt,
+                                           prev_vd + controller->max_voltage_mod_ramp * dt);
+    controller->voltage_dq.q = 0.0f;
+
+    controller->electrical_phase_vel = clamp_float(controller->target_electrical_phase_vel,
+                                                   prev_vel - controller->max_electrical_phase_vel_ramp * dt,
+                                                   prev_vel + controller->max_electrical_phase_vel_ramp * dt);
+    controller->electrical_phase = wrap_pm_pi(controller->electrical_phase +
+                                             controller->electrical_phase_vel * dt);
+
+    float pwm_phase = wrap_pm_pi(controller->electrical_phase +
+                                 OPEN_LOOP_PWM_PHASE_ADVANCE_PERIODS * dt *
+                                     controller->electrical_phase_vel);
+    if (foc_controller_apply_voltage(foc_controller,
+                                     controller->voltage_dq.d,
+                                     controller->voltage_dq.q,
+                                     pwm_phase) == 0U) {
+        open_loop_controller_set_enabled(controller, 0U);
+        return 0U;
+    }
+
+    return 1U;
+}
+
+void open_loop_controller_get_status(const OpenLoopController *controller,
+                                     OpenLoopController *status)
+{
+    if ((controller == 0) || (status == 0)) {
+        return;
+    }
+
+    *status = *controller;
 }

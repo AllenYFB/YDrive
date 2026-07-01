@@ -45,12 +45,24 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
+    ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/arm_cos_f32.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/arm_sin_f32.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/control_loop.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/foc.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/open_loop_controller.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/pwm_adc.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/utils.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Communication/usb_command.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Tasks/monitor_task.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Tasks/tasks.c
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Communication
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Tasks
 )
 
 # Add project symbols (macros)

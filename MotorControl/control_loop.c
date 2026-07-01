@@ -10,7 +10,16 @@
 osThreadId_t controlLoopTaskHandle;
 
 static volatile ControlLoopStatus control_loop_status;
+static OpenLoopController open_loop_controller;
+static FocController foc_controller;
 
+static const osThreadAttr_t controlLoopTask_attributes = {
+    .name = "ctrlLoop",
+    .stack_size = 512 * 4,
+    .priority = (osPriority_t)osPriorityAboveNormal,
+};
+
+static void control_loop_task(void *argument);
 static void control_loop_do_updates(void);
 static void encoder_update(void);
 static void sensorless_estimator_update(void);
@@ -33,10 +42,26 @@ void control_loop_get_status(ControlLoopStatus *status)
     *status = control_loop_status;
 }
 
-void ControlLoopTask(void *argument)
+void control_loop_set_open_loop_target(float voltage_mod, float electrical_phase_vel)
+{
+    open_loop_controller_set_target(&open_loop_controller, voltage_mod, electrical_phase_vel);
+}
+
+void control_loop_set_open_loop_enabled(uint32_t enable)
+{
+    open_loop_controller_set_enabled(&open_loop_controller, enable);
+}
+
+void control_loop_start_task(void)
+{
+    controlLoopTaskHandle = osThreadNew(control_loop_task, NULL, &controlLoopTask_attributes);
+}
+
+static void control_loop_task(void *argument)
 {
     (void)argument;
-    open_loop_controller_init();
+    open_loop_controller_init(&open_loop_controller);
+    foc_controller_init(&foc_controller);
 
     for (;;) {
         uint32_t flags = osThreadFlagsWait(CONTROL_LOOP_CURRENT_MEAS_FLAG,
@@ -86,23 +111,25 @@ static void motor_update(void)
     pwm_adc_get_status(&pwm_status);
 
     if (pwm_status.offset_calibrated == 0U) {
-        open_loop_controller_enable(0U);
+        open_loop_controller_set_enabled(&open_loop_controller, 0U);
         pwm_adc_set_gate_enabled(0U);
         pwm_adc_write_pwm_neutral();
         return;
     }
 
-    open_loop_controller_update(CONTROL_LOOP_PERIOD_SEC);
+    (void)open_loop_controller_update(&open_loop_controller,
+                                      &foc_controller,
+                                      CONTROL_LOOP_PERIOD_SEC);
 
-    OpenLoopStatus open_loop;
-    FocStatus foc;
-    open_loop_controller_get_status(&open_loop);
-    foc_get_status(&foc);
+    OpenLoopController open_loop;
+    FocController foc;
+    open_loop_controller_get_status(&open_loop_controller, &open_loop);
+    foc_controller_get_status(&foc_controller, &foc);
 
     control_loop_status.open_loop_enable = open_loop.enabled;
-    control_loop_status.open_loop_phase = open_loop.phase;
-    control_loop_status.open_loop_phase_vel = open_loop.phase_vel;
-    control_loop_status.open_loop_voltage = open_loop.vdq_setpoint.d;
+    control_loop_status.open_loop_electrical_phase = open_loop.electrical_phase;
+    control_loop_status.open_loop_electrical_phase_vel = open_loop.electrical_phase_vel;
+    control_loop_status.open_loop_voltage_mod = open_loop.voltage_dq.d;
     control_loop_status.pwm_a = foc.pwm_a;
     control_loop_status.pwm_b = foc.pwm_b;
     control_loop_status.pwm_c = foc.pwm_c;
