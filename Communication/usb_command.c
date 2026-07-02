@@ -3,11 +3,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "control_loop.h"
+#include "motor_axis.h"
 #include "usbd_cdc_if.h"
 
 static void usb_command_send(const char *msg);
 static void usb_command_handle_line(char *line);
+static void usb_command_handle_open(const UsbCommandLine *command);
+static void usb_command_handle_stop(void);
+static void usb_command_handle_help(void);
 static char *skip_spaces(char *p);
 static uint32_t parse_float_arg(char **p, float *value);
 
@@ -39,42 +42,106 @@ void usb_command_receive(const uint8_t *data, uint32_t length)
 
 static void usb_command_handle_line(char *line)
 {
+    UsbCommandLine command = usb_command_parse_line(line);
+
+    switch (command.type) {
+    case USB_COMMAND_OPEN:
+        usb_command_handle_open(&command);
+        break;
+
+    case USB_COMMAND_STOP:
+    case USB_COMMAND_IDLE:
+        usb_command_handle_stop();
+        break;
+
+    case USB_COMMAND_HELP:
+        usb_command_handle_help();
+        break;
+
+    case USB_COMMAND_UNKNOWN:
+    default:
+        usb_command_send("ERR unknown cmd\r\n");
+        break;
+    }
+}
+
+UsbCommandLine usb_command_parse_line(char *line)
+{
+    UsbCommandLine command = {
+        .type = USB_COMMAND_UNKNOWN,
+        .args = line,
+    };
+
+    if (line == 0) {
+        return command;
+    }
+
+    if (strncmp(line, "open", 4U) == 0) {
+        command.type = USB_COMMAND_OPEN;
+        command.args = line + 4;
+        return command;
+    }
+
+    if (strcmp(line, "stop") == 0) {
+        command.type = USB_COMMAND_STOP;
+        command.args = line + 4;
+        return command;
+    }
+
+    if (strcmp(line, "idle") == 0) {
+        command.type = USB_COMMAND_IDLE;
+        command.args = line + 4;
+        return command;
+    }
+
+    if (strcmp(line, "help") == 0) {
+        command.type = USB_COMMAND_HELP;
+        command.args = line + 4;
+        return command;
+    }
+
+    return command;
+}
+
+static void usb_command_handle_open(const UsbCommandLine *command)
+{
     float voltage;
     float electrical_phase_vel;
     char *args;
 
-    if (strncmp(line, "open", 4U) == 0) {
-        args = line + 4;
-        if ((parse_float_arg(&args, &voltage) != 0U) &&
-            (parse_float_arg(&args, &electrical_phase_vel) != 0U)) {
-            args = skip_spaces(args);
-            if (*args != '\0') {
-                usb_command_send("ERR open args\r\n");
-                return;
-            }
-
-            control_loop_set_open_loop_target(voltage, electrical_phase_vel);
-            control_loop_set_open_loop_enabled(1U);
-            usb_command_send("OK open\r\n");
-            return;
-        }
-
+    if (command == 0) {
         usb_command_send("ERR open usage\r\n");
         return;
     }
 
-    if ((strcmp(line, "stop") == 0) || (strcmp(line, "idle") == 0)) {
-        control_loop_set_open_loop_enabled(0U);
-        usb_command_send("OK stop\r\n");
+    args = command->args;
+
+    if ((parse_float_arg(&args, &voltage) == 0U) ||
+        (parse_float_arg(&args, &electrical_phase_vel) == 0U)) {
+        usb_command_send("ERR open usage\r\n");
         return;
     }
 
-    if (strcmp(line, "help") == 0) {
-        usb_command_send("cmd: open <voltage_mod> <electrical_rad_s>, stop\r\n");
+    args = skip_spaces(args);
+    if (*args != '\0') {
+        usb_command_send("ERR open args\r\n");
         return;
     }
 
-    usb_command_send("ERR unknown cmd\r\n");
+    motor_axis_set_open_loop_target(voltage, electrical_phase_vel);
+    motor_axis_set_open_loop_enabled(1U);
+    usb_command_send("OK open\r\n");
+}
+
+static void usb_command_handle_stop(void)
+{
+    motor_axis_set_open_loop_enabled(0U);
+    usb_command_send("OK stop\r\n");
+}
+
+static void usb_command_handle_help(void)
+{
+    usb_command_send("cmd: open <voltage_mod> <electrical_rad_s>, stop\r\n");
 }
 
 static char *skip_spaces(char *p)
@@ -105,3 +172,4 @@ static void usb_command_send(const char *msg)
 {
     (void)CDC_Transmit_FS((uint8_t *)msg, (uint16_t)strlen(msg));
 }
+

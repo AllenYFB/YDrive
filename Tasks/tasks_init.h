@@ -1,5 +1,5 @@
-#ifndef TASKS_H
-#define TASKS_H
+#ifndef TASKS_INIT_H
+#define TASKS_INIT_H
 
 #include "cmsis_os.h"
 

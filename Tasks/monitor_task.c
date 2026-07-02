@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "control_loop.h"
+#include "motor_axis.h"
 #include "gpio.h"
 #include "main.h"
 #include "pwm_adc.h"
@@ -42,13 +42,13 @@ static void monitor_task_print_once(void)
 {
     static uint32_t last_adc_count;
     static uint32_t last_current_count;
-    char msg[192];
+    char msg[224];
     PwmAdcStatus pwm_adc_status;
-    ControlLoopStatus control_status;
+    MotorAxisStatus control_status;
     GPIO_PinState nfault_state = HAL_GPIO_ReadPin(nFAULT_GPIO_Port, nFAULT_Pin);
 
     pwm_adc_get_status(&pwm_adc_status);
-    control_loop_get_status(&control_status);
+    motor_axis_get_status(&control_status);
 
     uint32_t adc_hz = pwm_adc_status.adc_irq_count - last_adc_count;
     uint32_t current_hz = pwm_adc_status.current_meas_count - last_current_count;
@@ -60,13 +60,16 @@ static void monitor_task_print_once(void)
     int32_t v_milli = (int32_t)(control_status.open_loop_voltage_mod * 1000.0f);
 
     int len = snprintf(msg, sizeof(msg),
-                       "nFAULT=%u adc_irq=%lu current=%lu dc_cal=%lu dir=%u axis=%lu cal=%u open=%lu phase_mrad=%ld vel_mrad_s=%ld v_milli=%ld pwm=%lu/%lu/%lu vbus=%lu ib=%lu ic=%lu off_b=%ld off_c=%ld ia=%ld ibc=%ld icc=%ld\r\n",
+                       "nFAULT=%u adc_irq=%lu current=%lu dc_cal=%lu dir=%u axis=%lu deadline=%lu mode=%lu out=%lu cal=%u open=%lu phase_mrad=%ld vel_mrad_s=%ld v_milli=%ld pwm=%lu/%lu/%lu vbus=%lu ib=%lu ic=%lu off_b=%ld off_c=%ld ia=%ld ibc=%ld icc=%ld\r\n",
                        (nfault_state == GPIO_PIN_SET) ? 1U : 0U,
                        (unsigned long)adc_hz,
                        (unsigned long)current_hz,
                        (unsigned long)pwm_adc_status.dc_cal_count,
                        pwm_adc_status.counting_down,
                        (unsigned long)control_status.loop_count,
+                       (unsigned long)control_status.deadline_miss_count,
+                       (unsigned long)control_status.mode,
+                       (unsigned long)control_status.output_active,
                        pwm_adc_status.offset_calibrated,
                        (unsigned long)control_status.open_loop_enable,
                        (long)phase_mrad,
@@ -88,3 +91,4 @@ static void monitor_task_print_once(void)
         (void)CDC_Transmit_FS((uint8_t *)msg, (uint16_t)strlen(msg));
     }
 }
+

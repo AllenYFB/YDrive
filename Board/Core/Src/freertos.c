@@ -26,7 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "usb_device.h"
-#include "tasks.h"
+#include "tasks_init.h"
 
 /* USER CODE END Includes */
 

@@ -1,7 +1,7 @@
 #include "pwm_adc.h"
 
 #include "adc.h"
-#include "control_loop.h"
+#include "motor_axis.h"
 #include "gpio.h"
 #include "main.h"
 #include "tim.h"
@@ -178,7 +178,7 @@ static void pwm_adc_handle_current_window(ADC_HandleTypeDef *hadc)
     pwm_adc.latest_current.ia = -pwm_adc.latest_current.ib - pwm_adc.latest_current.ic;
 
     pwm_adc.status.current_meas_count++;
-    control_loop_signal_current_meas_from_isr();
+    motor_axis_signal_current_meas_from_isr();
 }
 
 static void pwm_adc_handle_dc_cal_window(ADC_HandleTypeDef *hadc)
@@ -208,3 +208,4 @@ static void pwm_adc_update_offset_filter(volatile int32_t *offset,
     *offset_q8 += (target_q8 - *offset_q8) >> DC_CAL_FILTER_SHIFT;
     *offset = *offset_q8 >> DC_CAL_FILTER_SHIFT;
 }
+
