@@ -12,7 +12,9 @@
  */
 #define CURRENT_MEAS_WATCHDOG_TIMEOUT_MS 10U
 #define MOTOR_AXIS_PERIOD_SEC 0.000125f
-#define OPEN_CURRENT_ALIGN_TIME_SEC 0.5f
+#define OPEN_CURRENT_ALIGN_TIME_SEC 0.2f
+#define OPEN_CURRENT_ALIGN_MAX_IQ 0.01f
+#define OPEN_CURRENT_ALIGN_IQ_FRACTION 0.2f
 
 osThreadId_t motorAxisTaskHandle;
 
@@ -24,6 +26,7 @@ typedef struct {
     OpenLoopController open_loop;
     CurrentController current;
     FocController foc;
+    float open_current_target_iq;
     float open_current_run_vel;
     float open_current_start_phase;
     float open_current_align_elapsed;
@@ -114,8 +117,15 @@ void motor_axis_start_open_voltage(float voltage_mod, float electrical_phase_vel
 
 void motor_axis_start_open_current(float iq_setpoint, float electrical_phase_vel)
 {
+    float align_iq;
+
     open_loop_controller_set_target(&motor_axis.open_loop, 0.0f, 0.0f);
-    current_controller_set_target(&motor_axis.current, 0.0f, iq_setpoint);
+    motor_axis.open_current_target_iq = iq_setpoint;
+    align_iq = clamp_float(iq_setpoint,
+                           -OPEN_CURRENT_ALIGN_MAX_IQ,
+                           OPEN_CURRENT_ALIGN_MAX_IQ);
+    align_iq *= OPEN_CURRENT_ALIGN_IQ_FRACTION;
+    current_controller_set_target(&motor_axis.current, 0.0f, align_iq);
     motor_axis.mode = MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_ALIGN;
     motor_axis.open_current_run_vel = electrical_phase_vel;
     motor_axis.open_current_start_phase = motor_axis.open_loop.electrical_phase;
@@ -215,6 +225,9 @@ static uint32_t motor_axis_run_open_loop_current_align(const PhaseCurrentSample 
     motor_axis.open_loop.electrical_phase_vel = 0.0f;
 
     if (motor_axis.open_current_align_elapsed >= OPEN_CURRENT_ALIGN_TIME_SEC) {
+        current_controller_set_target(&motor_axis.current,
+                                      0.0f,
+                                      motor_axis.open_current_target_iq);
         open_loop_controller_set_target(&motor_axis.open_loop,
                                         0.0f,
                                         motor_axis.open_current_run_vel);
