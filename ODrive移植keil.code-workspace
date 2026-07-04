@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../ODrive3.6/ODrive_0.5.1/ODrive-fw-v0.5.1"
+		},
+		{
+			"path": "../../../Downloads/OV-Watch-main/Software/OV_Watch"
 		}
 	],
 	"launch": {

@@ -26,6 +26,7 @@ TIM1 center-aligned PWM
 - `MotorAxis` 作为电机轴主对象
 - 支持开环电压旋转：`open`
 - 支持开环相位 + 电流 PI 测试模式：`cur`
+- 支持 USB 查看/设置电流环参数：`cparam` / `cgain`
 - USB CDC ASCII 命令控制
 - 监控输出分为 `sys` / `ctrl` / `adc` 三组
 
@@ -141,7 +142,8 @@ arm_cos_f32.c / arm_sin_f32.c / arm_sin_cos_f32.h
 ```c
 MOTOR_AXIS_MODE_IDLE              = 0
 MOTOR_AXIS_MODE_OPEN_LOOP_VOLTAGE = 1
-MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT = 2
+MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_LOCKIN = 2
+MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_RUN    = 3
 ```
 
 ### 开环电压模式
@@ -192,9 +194,23 @@ idle
 ```text
 open <voltage_mod> <electrical_rad_s>
 cur <iq_amp> <electrical_rad_s>
+cparam [phase_current_gain current_limit max_voltage_mod]
+cgain [p_gain i_gain]
 stop
 idle
 help
+```
+
+`cparam` 不带参数时打印当前电流采样比例、限流和最大电压调制量；带参数时更新：
+
+```text
+cparam 0.01 5 0.08
+```
+
+`cgain` 不带参数时打印当前 PI 参数；带参数时更新：
+
+```text
+cgain 0.002 1
 ```
 
 ## 监控输出
@@ -203,7 +219,7 @@ help
 
 ```text
 sys: nfault=1 mode=2 out=1 cal=1 loop=12345 miss=0 adc_hz=48000 cur_hz=8000
-ctrl: open=1 phase_mrad=120 vel_mrad_s=5000 v_milli=0 iq_sp_ma=20 id_ma=-5 iq_ma=18 vd_milli=1 vq_milli=3 ierr=0
+ctrl: open=1 phase_mrad=120 vel_mrad_s=5000 v_milli=0 iq_sp_ma=20 iq_ramp_ma=18 id_ma=-5 iq_ma=18 vd_milli=1 vq_milli=3 ierr=0
 adc: dir=1 dc_cal=2048 vbus=807 raw=386/384 off=384/383 iabc=-2/1/1 pwm=1749/1750/1751
 ```
 
@@ -225,6 +241,7 @@ adc: dir=1 dc_cal=2048 vbus=807 raw=386/384 off=384/383 iabc=-2/1/1 pwm=1749/175
 - `vel_mrad_s`：开环电角速度，单位 mrad/s
 - `v_milli`：开环电压调制量，乘以 1000 打印
 - `iq_sp_ma`：q 轴目标电流，单位 mA
+- `iq_ramp_ma`：经过软启动斜坡后真正送入 PI 的 q 轴电流目标，单位 mA
 - `id_ma` / `iq_ma`：测得 d/q 轴电流，单位 mA
 - `vd_milli` / `vq_milli`：电流 PI 输出的 d/q 轴电压调制量，乘以 1000 打印
 - `ierr`：电流环错误标志
@@ -302,6 +319,8 @@ open 0.02 5
 cur 0.02 5
 ```
 
+如果 `cur` 启动瞬间仍有明显抖动，先降低第二个参数，例如 `cur 0.05 2`；开环电流模式下速度也会影响启动冲击。
+
 ## 参考文档
 
 - [Docs/environment_and_build.md](Docs/environment_and_build.md)
@@ -313,8 +332,8 @@ cur 0.02 5
 
 建议继续按这个顺序推进：
 
-1. 标定 ADC raw 到真实相电流 A 的比例。
-2. 根据电阻/电感设置更合理的 PI 参数。
+1. 用 `cparam` 标定 ADC raw 到真实相电流 A 的比例。
+2. 用 `cgain` 根据电阻/电感设置更合理的 PI 参数。
 3. 增加电流环更严格的 fault 策略。
 4. 接入编码器角度，替换开环 phase。
 5. 做速度闭环。

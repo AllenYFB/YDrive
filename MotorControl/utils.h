@@ -11,7 +11,7 @@
 typedef struct {
     float d;
     float q;
-} Float2D;
+} DqVector;
 
 static inline float clamp_float(float value, float min_value, float max_value)
 {

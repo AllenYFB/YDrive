@@ -12,14 +12,27 @@
 
 typedef struct {
     float phase_current_gain;
-    float p_gain;
-    float i_gain;
     float current_limit;
     float max_voltage_mod;
-    Float2D current_setpoint;
-    Float2D current_measured;
-    Float2D voltage_integrator;
-    Float2D voltage_mod;
+} CurrentControllerConfig;
+
+typedef struct {
+    DqVector setpoint;
+    DqVector ramped_setpoint;
+    DqVector measured;
+} CurrentControllerCurrentState;
+
+typedef struct {
+    float kp;
+    float ki;
+    DqVector integral_voltage;
+    DqVector output_voltage;
+} CurrentControllerPi;
+
+typedef struct {
+    CurrentControllerConfig config;
+    CurrentControllerCurrentState current;
+    CurrentControllerPi pi;
     uint32_t enabled;
     uint32_t error;
 } CurrentController;
@@ -28,6 +41,10 @@ void current_controller_init(CurrentController *controller);
 void current_controller_set_enabled(CurrentController *controller, uint32_t enable);
 void current_controller_set_target(CurrentController *controller, float id_setpoint, float iq_setpoint);
 void current_controller_set_gains(CurrentController *controller, float p_gain, float i_gain);
+void current_controller_set_phase_current_gain(CurrentController *controller, float phase_current_gain);
+void current_controller_set_limits(CurrentController *controller,
+                                   float current_limit,
+                                   float max_voltage_mod);
 void current_controller_clear_error(CurrentController *controller);
 uint32_t current_controller_update(CurrentController *controller,
                                    FocController *foc_controller,

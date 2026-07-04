@@ -9,8 +9,8 @@
 
 #define PWM_MIN_TICKS 1U
 #define PWM_MAX_TICKS 3499U
-#define DC_CAL_FILTER_SHIFT 8U
-#define DC_CAL_READY_SAMPLES 2048U
+#define DC_CAL_FILTER_SHIFT 11U
+#define DC_CAL_READY_SAMPLES 4096U
 
 typedef struct {
     volatile PwmAdcStatus status;
@@ -196,7 +196,7 @@ static void pwm_adc_handle_dc_cal_window(ADC_HandleTypeDef *hadc)
     if (pwm_adc.status.dc_cal_count < DC_CAL_READY_SAMPLES) {
         pwm_adc.status.dc_cal_count++;
     } else {
-        pwm_adc.status.offset_calibrated = 1U;
+        pwm_adc.status.offset_calibrated = PWM_ADC_OFFSET_CALIBRATED;
     }
 }
 

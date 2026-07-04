@@ -10,6 +10,12 @@
  */
 #define CURRENT_MEAS_WATCHDOG_TIMEOUT_MS 10U
 #define MOTOR_AXIS_PERIOD_SEC 0.000125f
+#define OPEN_CURRENT_LOCKIN_TIME_SEC 0.4f
+/* Keep the open-loop current startup phase fixed. ODrive uses a small
+ * ramp_distance for lock-in, but without encoder feedback this project starts
+ * more gently by building current first, then ramping phase velocity.
+ */
+#define OPEN_CURRENT_LOCKIN_PHASE_RAD 0.0f
 
 osThreadId_t motorAxisTaskHandle;
 
@@ -21,6 +27,9 @@ typedef struct {
     OpenLoopController open_loop;
     CurrentController current;
     FocController foc;
+    float open_current_run_vel;
+    float open_current_lockin_phase;
+    float open_current_lockin_elapsed;
 } MotorAxis;
 
 static MotorAxis motor_axis = {
@@ -32,8 +41,13 @@ static void motor_axis_init(void);
 static void motor_axis_run_once(void);
 static uint32_t motor_axis_update_controller(const PhaseCurrentSample *sample);
 static uint32_t motor_axis_run_open_loop_voltage(void);
-static uint32_t motor_axis_run_open_loop_current(const PhaseCurrentSample *sample);
+static uint32_t motor_axis_run_open_loop_current_lockin(const PhaseCurrentSample *sample);
+static uint32_t motor_axis_run_open_loop_current_run(const PhaseCurrentSample *sample);
+static uint32_t motor_axis_run_open_loop_current_at_phase(const PhaseCurrentSample *sample,
+                                                         float current_phase,
+                                                         float phase_vel);
 static void motor_axis_update_output(uint32_t controller_active);
+static uint32_t motor_axis_output_ready(const PwmAdcStatus *pwm_status);
 static void motor_axis_arm_output(void);
 static void motor_axis_capture_status(void);
 static void motor_axis_disarm(void);
@@ -64,8 +78,9 @@ void motor_axis_signal_current_meas_from_isr(void)
     /* A new real-current sample arrived before the previous sample produced PWM timings.
      * Once output is armed, this is a real control deadline miss and must disarm.
      */
-    if ((motor_axis.output_active != 0U) && (motor_axis.control_cycle_finished == 0U)) {
-        motor_axis.status.deadline_miss_count++;
+    if ((motor_axis.output_active != 0U) &&
+        (motor_axis.control_cycle_finished == 0U)) {
+        motor_axis.status.runtime.deadline_miss_count++;
         motor_axis_disarm();
     }
 
@@ -86,45 +101,52 @@ void motor_axis_get_status(MotorAxisStatus *status)
     *status = motor_axis.status;
 }
 
-void motor_axis_set_open_loop_target(float voltage_mod, float electrical_phase_vel)
+void motor_axis_start_open_voltage(float voltage_mod, float electrical_phase_vel)
 {
     open_loop_controller_set_target(&motor_axis.open_loop, voltage_mod, electrical_phase_vel);
+    motor_axis.mode = MOTOR_AXIS_MODE_OPEN_LOOP_VOLTAGE;
+    open_loop_controller_set_enabled(&motor_axis.open_loop, 1U);
+    current_controller_set_enabled(&motor_axis.current, 0U);
+    /* The control task arms the output only after it has written the first PWM update.
+     * This prevents a USB command from enabling deadline checks mid-sample.
+     */
+    motor_axis.output_active = 0U;
+    motor_axis.control_cycle_finished = 1U;
 }
 
-void motor_axis_set_open_loop_enabled(uint32_t enable)
+void motor_axis_start_open_current(float iq_setpoint, float electrical_phase_vel)
 {
-    if (enable != 0U) {
-        motor_axis.mode = MOTOR_AXIS_MODE_OPEN_LOOP_VOLTAGE;
-        open_loop_controller_set_enabled(&motor_axis.open_loop, 1U);
-        current_controller_set_enabled(&motor_axis.current, 0U);
-        /* The control task arms the output only after it has written the first PWM update.
-         * This prevents a USB command from enabling deadline checks mid-sample.
-         */
-        motor_axis.output_active = 0U;
-        motor_axis.control_cycle_finished = 1U;
-    } else {
-        motor_axis_disarm();
-    }
-}
-
-void motor_axis_set_open_loop_current_target(float iq_setpoint, float electrical_phase_vel)
-{
-    open_loop_controller_set_target(&motor_axis.open_loop, 0.0f, electrical_phase_vel);
+    open_loop_controller_set_target(&motor_axis.open_loop, 0.0f, 0.0f);
     current_controller_set_target(&motor_axis.current, 0.0f, iq_setpoint);
+    motor_axis.mode = MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_LOCKIN;
+    motor_axis.open_current_run_vel = electrical_phase_vel;
+    motor_axis.open_current_lockin_phase = motor_axis.open_loop.electrical_phase;
+    motor_axis.open_current_lockin_elapsed = 0.0f;
+    open_loop_controller_set_enabled(&motor_axis.open_loop, 1U);
+    current_controller_clear_error(&motor_axis.current);
+    current_controller_set_enabled(&motor_axis.current, 1U);
+    motor_axis.output_active = 0U;
+    motor_axis.control_cycle_finished = 1U;
 }
 
-void motor_axis_set_open_loop_current_enabled(uint32_t enable)
+void motor_axis_stop(void)
 {
-    if (enable != 0U) {
-        motor_axis.mode = MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT;
-        open_loop_controller_set_enabled(&motor_axis.open_loop, 1U);
-        current_controller_clear_error(&motor_axis.current);
-        current_controller_set_enabled(&motor_axis.current, 1U);
-        motor_axis.output_active = 0U;
-        motor_axis.control_cycle_finished = 1U;
-    } else {
-        motor_axis_disarm();
-    }
+    motor_axis_disarm();
+}
+
+void motor_axis_set_current_pi(float p_gain, float i_gain)
+{
+    current_controller_set_gains(&motor_axis.current, p_gain, i_gain);
+    motor_axis_capture_status();
+}
+
+void motor_axis_set_current_config(float phase_current_gain,
+                                   float current_limit,
+                                   float max_voltage_mod)
+{
+    current_controller_set_phase_current_gain(&motor_axis.current, phase_current_gain);
+    current_controller_set_limits(&motor_axis.current, current_limit, max_voltage_mod);
+    motor_axis_capture_status();
 }
 
 static void motor_axis_init(void)
@@ -134,6 +156,7 @@ static void motor_axis_init(void)
     open_loop_controller_init(&motor_axis.open_loop);
     current_controller_init(&motor_axis.current);
     foc_controller_init(&motor_axis.foc);
+    motor_axis_capture_status();
 }
 
 static void motor_axis_run_once(void)
@@ -143,16 +166,16 @@ static void motor_axis_run_once(void)
 
     pwm_adc_get_phase_current_sample(&sample);
 
-    motor_axis.status.latest_ia = sample.ia;
-    motor_axis.status.latest_ib = sample.ib;
-    motor_axis.status.latest_ic = sample.ic;
+    motor_axis.status.phase_current.ia = sample.ia;
+    motor_axis.status.phase_current.ib = sample.ib;
+    motor_axis.status.phase_current.ic = sample.ic;
 
     controller_active = motor_axis_update_controller(&sample);
     motor_axis_update_output(controller_active);
 
     /* PWM timings for this sample have been calculated and written. */
     motor_axis.control_cycle_finished = 1U;
-    motor_axis.status.loop_count++;
+    motor_axis.status.runtime.loop_count++;
 }
 
 static uint32_t motor_axis_update_controller(const PhaseCurrentSample *sample)
@@ -161,8 +184,11 @@ static uint32_t motor_axis_update_controller(const PhaseCurrentSample *sample)
     case MOTOR_AXIS_MODE_OPEN_LOOP_VOLTAGE:
         return motor_axis_run_open_loop_voltage();
 
-    case MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT:
-        return motor_axis_run_open_loop_current(sample);
+    case MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_LOCKIN:
+        return motor_axis_run_open_loop_current_lockin(sample);
+
+    case MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_RUN:
+        return motor_axis_run_open_loop_current_run(sample);
 
     case MOTOR_AXIS_MODE_IDLE:
     default:
@@ -177,10 +203,37 @@ static uint32_t motor_axis_run_open_loop_voltage(void)
                                        MOTOR_AXIS_PERIOD_SEC);
 }
 
-static uint32_t motor_axis_run_open_loop_current(const PhaseCurrentSample *sample)
+static uint32_t motor_axis_run_open_loop_current_lockin(const PhaseCurrentSample *sample)
+{
+    float x;
+    float phase;
+
+    if (sample == 0) {
+        return 0U;
+    }
+
+    motor_axis.open_current_lockin_elapsed += MOTOR_AXIS_PERIOD_SEC;
+    x = clamp_float(motor_axis.open_current_lockin_elapsed / OPEN_CURRENT_LOCKIN_TIME_SEC,
+                    0.0f,
+                    1.0f);
+    phase = wrap_pm_pi(motor_axis.open_current_lockin_phase +
+                       OPEN_CURRENT_LOCKIN_PHASE_RAD * x);
+    motor_axis.open_loop.electrical_phase = phase;
+    motor_axis.open_loop.electrical_phase_vel = 0.0f;
+
+    if (x >= 1.0f) {
+        open_loop_controller_set_target(&motor_axis.open_loop,
+                                        0.0f,
+                                        motor_axis.open_current_run_vel);
+        motor_axis.mode = MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_RUN;
+    }
+
+    return motor_axis_run_open_loop_current_at_phase(sample, phase, 0.0f);
+}
+
+static uint32_t motor_axis_run_open_loop_current_run(const PhaseCurrentSample *sample)
 {
     float current_phase;
-    float pwm_phase;
 
     if (sample == 0) {
         return 0U;
@@ -192,9 +245,22 @@ static uint32_t motor_axis_run_open_loop_current(const PhaseCurrentSample *sampl
     }
 
     current_phase = motor_axis.open_loop.electrical_phase;
-    pwm_phase = wrap_pm_pi(current_phase +
-                           1.5f * MOTOR_AXIS_PERIOD_SEC *
-                               motor_axis.open_loop.electrical_phase_vel);
+    return motor_axis_run_open_loop_current_at_phase(sample,
+                                                     current_phase,
+                                                     motor_axis.open_loop.electrical_phase_vel);
+}
+
+static uint32_t motor_axis_run_open_loop_current_at_phase(const PhaseCurrentSample *sample,
+                                                         float current_phase,
+                                                         float phase_vel)
+{
+    float pwm_phase;
+
+    if (sample == 0) {
+        return 0U;
+    }
+
+    pwm_phase = wrap_pm_pi(current_phase + 1.5f * MOTOR_AXIS_PERIOD_SEC * phase_vel);
 
     return current_controller_update(&motor_axis.current,
                                      &motor_axis.foc,
@@ -215,7 +281,7 @@ static void motor_axis_update_output(uint32_t controller_active)
 
     pwm_adc_get_status(&pwm_status);
 
-    if (pwm_status.offset_calibrated == 0U) {
+    if (motor_axis_output_ready(&pwm_status) == 0U) {
         motor_axis_disarm();
         return;
     }
@@ -224,10 +290,20 @@ static void motor_axis_update_output(uint32_t controller_active)
     motor_axis_arm_output();
 }
 
+static uint32_t motor_axis_output_ready(const PwmAdcStatus *pwm_status)
+{
+    if (pwm_status == 0) {
+        return 0U;
+    }
+
+    return (pwm_status->offset_calibrated == PWM_ADC_OFFSET_CALIBRATED) ? 1U : 0U;
+}
+
 static void motor_axis_arm_output(void)
 {
     pwm_adc_set_gate_enabled(1U);
     motor_axis.output_active = 1U;
+    motor_axis.status.runtime.output_active = motor_axis.output_active;
 }
 
 static void motor_axis_capture_status(void)
@@ -239,22 +315,29 @@ static void motor_axis_capture_status(void)
     current_controller_get_status(&motor_axis.current, &current);
     foc_controller_get_status(&motor_axis.foc, &foc);
 
-    motor_axis.status.mode = motor_axis.mode;
-    motor_axis.status.output_active = motor_axis.output_active;
-    motor_axis.status.open_loop_enable = open_loop.enabled;
-    motor_axis.status.open_loop_electrical_phase = open_loop.electrical_phase;
-    motor_axis.status.open_loop_electrical_phase_vel = open_loop.electrical_phase_vel;
-    motor_axis.status.open_loop_voltage_mod = open_loop.voltage_dq.d;
-    motor_axis.status.current_id_setpoint = current.current_setpoint.d;
-    motor_axis.status.current_iq_setpoint = current.current_setpoint.q;
-    motor_axis.status.current_id_measured = current.current_measured.d;
-    motor_axis.status.current_iq_measured = current.current_measured.q;
-    motor_axis.status.current_vd_mod = current.voltage_mod.d;
-    motor_axis.status.current_vq_mod = current.voltage_mod.q;
-    motor_axis.status.current_error = current.error;
-    motor_axis.status.pwm_a = foc.pwm_a;
-    motor_axis.status.pwm_b = foc.pwm_b;
-    motor_axis.status.pwm_c = foc.pwm_c;
+    motor_axis.status.runtime.mode = motor_axis.mode;
+    motor_axis.status.runtime.output_active = motor_axis.output_active;
+    motor_axis.status.open_loop.enabled = open_loop.enabled;
+    motor_axis.status.open_loop.electrical_phase = open_loop.electrical_phase;
+    motor_axis.status.open_loop.electrical_phase_vel = open_loop.electrical_phase_vel;
+    motor_axis.status.open_loop.voltage_mod = open_loop.voltage_dq.d;
+    motor_axis.status.current.id_setpoint = current.current.setpoint.d;
+    motor_axis.status.current.iq_setpoint = current.current.setpoint.q;
+    motor_axis.status.current.id_ramped_setpoint = current.current.ramped_setpoint.d;
+    motor_axis.status.current.iq_ramped_setpoint = current.current.ramped_setpoint.q;
+    motor_axis.status.current.id_measured = current.current.measured.d;
+    motor_axis.status.current.iq_measured = current.current.measured.q;
+    motor_axis.status.current.vd_mod = current.pi.output_voltage.d;
+    motor_axis.status.current.vq_mod = current.pi.output_voltage.q;
+    motor_axis.status.current.phase_gain = current.config.phase_current_gain;
+    motor_axis.status.current.p_gain = current.pi.kp;
+    motor_axis.status.current.i_gain = current.pi.ki;
+    motor_axis.status.current.limit = current.config.current_limit;
+    motor_axis.status.current.max_voltage_mod = current.config.max_voltage_mod;
+    motor_axis.status.current.error = current.error;
+    motor_axis.status.pwm.a = foc.pwm_a;
+    motor_axis.status.pwm.b = foc.pwm_b;
+    motor_axis.status.pwm.c = foc.pwm_c;
 }
 
 static void motor_axis_disarm(void)

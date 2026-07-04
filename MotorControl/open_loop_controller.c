@@ -1,7 +1,7 @@
 #include "open_loop_controller.h"
 
 #define OPEN_LOOP_DEFAULT_MAX_VOLTAGE_RAMP 0.5f
-#define OPEN_LOOP_DEFAULT_MAX_PHASE_VEL_RAMP 40.0f
+#define OPEN_LOOP_DEFAULT_MAX_PHASE_VEL_RAMP 10.0f
 #define OPEN_LOOP_PWM_PHASE_ADVANCE_PERIODS 1.5f
 
 void open_loop_controller_init(OpenLoopController *controller)
@@ -43,6 +43,9 @@ void open_loop_controller_set_enabled(OpenLoopController *controller, uint32_t e
     if (controller->enabled == 0U) {
         controller->target_voltage_mod = 0.0f;
         controller->target_electrical_phase_vel = 0.0f;
+        controller->voltage_dq.d = 0.0f;
+        controller->voltage_dq.q = 0.0f;
+        controller->electrical_phase_vel = 0.0f;
     }
 }
 

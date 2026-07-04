@@ -10,6 +10,8 @@ extern "C" {
 
 #define PWM_PERIOD_TICKS 3500U
 #define PWM_CENTER_TICKS 1750U
+#define PWM_ADC_OFFSET_NOT_CALIBRATED 0U
+#define PWM_ADC_OFFSET_CALIBRATED 1U
 
 typedef struct {
     uint32_t adc_irq_count;

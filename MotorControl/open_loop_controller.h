@@ -11,7 +11,7 @@ typedef struct {
     float max_electrical_phase_vel_ramp;
     float target_voltage_mod;
     float target_electrical_phase_vel;
-    Float2D voltage_dq;
+    DqVector voltage_dq;
     float electrical_phase;
     float electrical_phase_vel;
     uint32_t enabled;
