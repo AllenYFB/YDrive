@@ -14,25 +14,13 @@ typedef struct {
     float phase_current_gain;
     float current_limit;
     float max_voltage_mod;
-} CurrentControllerConfig;
-
-typedef struct {
-    DqVector setpoint;
-    DqVector ramped_setpoint;
-    DqVector measured;
-} CurrentControllerCurrentState;
-
-typedef struct {
-    float kp;
-    float ki;
+    float p_gain;
+    float i_gain;
+    DqVector target_current;
+    DqVector ramped_current;
+    DqVector measured_current;
     DqVector integral_voltage;
     DqVector output_voltage;
-} CurrentControllerPi;
-
-typedef struct {
-    CurrentControllerConfig config;
-    CurrentControllerCurrentState current;
-    CurrentControllerPi pi;
     uint32_t enabled;
     uint32_t error;
 } CurrentController;

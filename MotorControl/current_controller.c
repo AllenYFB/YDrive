@@ -13,19 +13,20 @@
 #define CURRENT_REPORT_FILTER_K 0.1f
 #define CURRENT_INTEGRATOR_DECAY 0.99f
 
-static void current_controller_check_limit(CurrentController *controller,
-                                           float id,
-                                           float iq);
-static void current_controller_clarke_park(const PhaseCurrentSample *sample,
-                                           float phase_current_gain,
-                                           float current_phase,
-                                           float *id,
-                                           float *iq);
-static void current_controller_update_pi(CurrentController *controller,
-                                         float id,
-                                         float iq,
-                                         float dt);
-static void current_controller_ramp_setpoint(CurrentController *controller, float dt);
+static void current_controller_check_current_limit(CurrentController *controller,
+                                                  float id,
+                                                  float iq);
+static void current_controller_measure_current(const CurrentController *controller,
+                                               const PhaseCurrentSample *sample,
+                                               float current_phase,
+                                               float *id,
+                                               float *iq);
+static void current_controller_run_pi(CurrentController *controller,
+                                      float id,
+                                      float iq,
+                                      float dt);
+static void current_controller_ramp_current(CurrentController *controller, float dt);
+static void current_controller_reset_state(CurrentController *controller);
 
 void current_controller_init(CurrentController *controller)
 {
@@ -33,21 +34,12 @@ void current_controller_init(CurrentController *controller)
         return;
     }
 
-    controller->config.phase_current_gain = CURRENT_DEFAULT_PHASE_GAIN;
-    controller->config.current_limit = CURRENT_DEFAULT_LIMIT;
-    controller->config.max_voltage_mod = CURRENT_DEFAULT_MAX_MOD;
-    controller->pi.kp = CURRENT_DEFAULT_P_GAIN;
-    controller->pi.ki = CURRENT_DEFAULT_I_GAIN;
-    controller->current.setpoint.d = 0.0f;
-    controller->current.setpoint.q = 0.0f;
-    controller->current.ramped_setpoint.d = 0.0f;
-    controller->current.ramped_setpoint.q = 0.0f;
-    controller->current.measured.d = 0.0f;
-    controller->current.measured.q = 0.0f;
-    controller->pi.integral_voltage.d = 0.0f;
-    controller->pi.integral_voltage.q = 0.0f;
-    controller->pi.output_voltage.d = 0.0f;
-    controller->pi.output_voltage.q = 0.0f;
+    controller->phase_current_gain = CURRENT_DEFAULT_PHASE_GAIN;
+    controller->current_limit = CURRENT_DEFAULT_LIMIT;
+    controller->max_voltage_mod = CURRENT_DEFAULT_MAX_MOD;
+    controller->p_gain = CURRENT_DEFAULT_P_GAIN;
+    controller->i_gain = CURRENT_DEFAULT_I_GAIN;
+    current_controller_reset_state(controller);
     controller->enabled = 0U;
     controller->error = 0U;
 }
@@ -64,14 +56,7 @@ void current_controller_set_enabled(CurrentController *controller, uint32_t enab
     }
 
     if (controller->enabled == 0U) {
-        controller->current.setpoint.d = 0.0f;
-        controller->current.setpoint.q = 0.0f;
-        controller->current.ramped_setpoint.d = 0.0f;
-        controller->current.ramped_setpoint.q = 0.0f;
-        controller->pi.integral_voltage.d = 0.0f;
-        controller->pi.integral_voltage.q = 0.0f;
-        controller->pi.output_voltage.d = 0.0f;
-        controller->pi.output_voltage.q = 0.0f;
+        current_controller_reset_state(controller);
     }
 }
 
@@ -83,12 +68,12 @@ void current_controller_set_target(CurrentController *controller,
         return;
     }
 
-    controller->current.setpoint.d = clamp_float(id_setpoint,
-                                                 -controller->config.current_limit,
-                                                 controller->config.current_limit);
-    controller->current.setpoint.q = clamp_float(iq_setpoint,
-                                                 -controller->config.current_limit,
-                                                 controller->config.current_limit);
+    controller->target_current.d = clamp_float(id_setpoint,
+                                               -controller->current_limit,
+                                               controller->current_limit);
+    controller->target_current.q = clamp_float(iq_setpoint,
+                                               -controller->current_limit,
+                                               controller->current_limit);
 }
 
 void current_controller_set_gains(CurrentController *controller, float p_gain, float i_gain)
@@ -97,8 +82,8 @@ void current_controller_set_gains(CurrentController *controller, float p_gain, f
         return;
     }
 
-    controller->pi.kp = clamp_float(p_gain, 0.0f, 1.0f);
-    controller->pi.ki = clamp_float(i_gain, 0.0f, 1000.0f);
+    controller->p_gain = clamp_float(p_gain, 0.0f, 1.0f);
+    controller->i_gain = clamp_float(i_gain, 0.0f, 1000.0f);
 }
 
 void current_controller_set_phase_current_gain(CurrentController *controller,
@@ -108,7 +93,7 @@ void current_controller_set_phase_current_gain(CurrentController *controller,
         return;
     }
 
-    controller->config.phase_current_gain = clamp_float(phase_current_gain, -1.0f, 1.0f);
+    controller->phase_current_gain = clamp_float(phase_current_gain, -1.0f, 1.0f);
 }
 
 void current_controller_set_limits(CurrentController *controller,
@@ -119,11 +104,11 @@ void current_controller_set_limits(CurrentController *controller,
         return;
     }
 
-    controller->config.current_limit = clamp_float(current_limit, 0.0f, 200.0f);
-    controller->config.max_voltage_mod = clamp_float(max_voltage_mod, 0.0f, 0.95f);
+    controller->current_limit = clamp_float(current_limit, 0.0f, 200.0f);
+    controller->max_voltage_mod = clamp_float(max_voltage_mod, 0.0f, 0.95f);
     current_controller_set_target(controller,
-                                  controller->current.setpoint.d,
-                                  controller->current.setpoint.q);
+                                  controller->target_current.d,
+                                  controller->target_current.q);
 }
 
 void current_controller_clear_error(CurrentController *controller)
@@ -153,25 +138,21 @@ uint32_t current_controller_update(CurrentController *controller,
         return 0U;
     }
 
-    current_controller_clarke_park(sample,
-                                   controller->config.phase_current_gain,
-                                   current_phase,
-                                   &id,
-                                   &iq);
+    current_controller_measure_current(controller, sample, current_phase, &id, &iq);
 
-    current_controller_check_limit(controller, id, iq);
-    current_controller_ramp_setpoint(controller, dt);
+    current_controller_check_current_limit(controller, id, iq);
+    current_controller_ramp_current(controller, dt);
 
-    controller->current.measured.d += CURRENT_REPORT_FILTER_K *
-                                      (id - controller->current.measured.d);
-    controller->current.measured.q += CURRENT_REPORT_FILTER_K *
-                                      (iq - controller->current.measured.q);
+    controller->measured_current.d += CURRENT_REPORT_FILTER_K *
+                                      (id - controller->measured_current.d);
+    controller->measured_current.q += CURRENT_REPORT_FILTER_K *
+                                      (iq - controller->measured_current.q);
 
-    current_controller_update_pi(controller, id, iq, dt);
+    current_controller_run_pi(controller, id, iq, dt);
 
     if (foc_controller_apply_voltage(foc_controller,
-                                     controller->pi.output_voltage.d,
-                                     controller->pi.output_voltage.q,
+                                     controller->output_voltage.d,
+                                     controller->output_voltage.q,
                                      pwm_phase) == 0U) {
         controller->error |= CURRENT_CONTROLLER_ERROR_FOC;
         current_controller_set_enabled(controller, 0U);
@@ -191,11 +172,11 @@ void current_controller_get_status(const CurrentController *controller,
     *status = *controller;
 }
 
-static void current_controller_check_limit(CurrentController *controller,
-                                           float id,
-                                           float iq)
+static void current_controller_check_current_limit(CurrentController *controller,
+                                                  float id,
+                                                  float iq)
 {
-    float limit = controller->config.current_limit;
+    float limit = controller->current_limit;
 
     if ((id * id + iq * iq) > (limit * limit)) {
         controller->error |= CURRENT_CONTROLLER_ERROR_CURRENT_LIMIT;
@@ -204,14 +185,14 @@ static void current_controller_check_limit(CurrentController *controller,
     }
 }
 
-static void current_controller_clarke_park(const PhaseCurrentSample *sample,
-                                           float phase_current_gain,
-                                           float current_phase,
-                                           float *id,
-                                           float *iq)
+static void current_controller_measure_current(const CurrentController *controller,
+                                               const PhaseCurrentSample *sample,
+                                               float current_phase,
+                                               float *id,
+                                               float *iq)
 {
-    float ib = (float)sample->ib * phase_current_gain;
-    float ic = (float)sample->ic * phase_current_gain;
+    float ib = (float)sample->ib * controller->phase_current_gain;
+    float ic = (float)sample->ic * controller->phase_current_gain;
     float i_alpha = -ib - ic;
     float i_beta = ONE_BY_SQRT3 * (ib - ic);
     float c = arm_cos_f32(current_phase);
@@ -221,40 +202,54 @@ static void current_controller_clarke_park(const PhaseCurrentSample *sample,
     *iq = c * i_beta - s * i_alpha;
 }
 
-static void current_controller_update_pi(CurrentController *controller,
-                                         float id,
-                                         float iq,
-                                         float dt)
+static void current_controller_run_pi(CurrentController *controller,
+                                      float id,
+                                      float iq,
+                                      float dt)
 {
-    float err_d = controller->current.ramped_setpoint.d - id;
-    float err_q = controller->current.ramped_setpoint.q - iq;
-    float vd = controller->pi.integral_voltage.d + err_d * controller->pi.kp;
-    float vq = controller->pi.integral_voltage.q + err_q * controller->pi.kp;
+    float err_d = controller->ramped_current.d - id;
+    float err_q = controller->ramped_current.q - iq;
+    float vd = controller->integral_voltage.d + err_d * controller->p_gain;
+    float vq = controller->integral_voltage.q + err_q * controller->p_gain;
     float v_mag = sqrtf(vd * vd + vq * vq);
 
-    if (v_mag > controller->config.max_voltage_mod) {
-        float scale = controller->config.max_voltage_mod / v_mag;
+    if (v_mag > controller->max_voltage_mod) {
+        float scale = controller->max_voltage_mod / v_mag;
         vd *= scale;
         vq *= scale;
-        controller->pi.integral_voltage.d *= CURRENT_INTEGRATOR_DECAY;
-        controller->pi.integral_voltage.q *= CURRENT_INTEGRATOR_DECAY;
+        controller->integral_voltage.d *= CURRENT_INTEGRATOR_DECAY;
+        controller->integral_voltage.q *= CURRENT_INTEGRATOR_DECAY;
     } else {
-        controller->pi.integral_voltage.d += err_d * controller->pi.ki * dt;
-        controller->pi.integral_voltage.q += err_q * controller->pi.ki * dt;
+        controller->integral_voltage.d += err_d * controller->i_gain * dt;
+        controller->integral_voltage.q += err_q * controller->i_gain * dt;
     }
 
-    controller->pi.output_voltage.d = vd;
-    controller->pi.output_voltage.q = vq;
+    controller->output_voltage.d = vd;
+    controller->output_voltage.q = vq;
 }
 
-static void current_controller_ramp_setpoint(CurrentController *controller, float dt)
+static void current_controller_ramp_current(CurrentController *controller, float dt)
 {
     float step = CURRENT_DEFAULT_SETPOINT_RAMP * dt;
 
-    controller->current.ramped_setpoint.d = clamp_float(controller->current.setpoint.d,
-                                                        controller->current.ramped_setpoint.d - step,
-                                                        controller->current.ramped_setpoint.d + step);
-    controller->current.ramped_setpoint.q = clamp_float(controller->current.setpoint.q,
-                                                        controller->current.ramped_setpoint.q - step,
-                                                        controller->current.ramped_setpoint.q + step);
+    controller->ramped_current.d = clamp_float(controller->target_current.d,
+                                               controller->ramped_current.d - step,
+                                               controller->ramped_current.d + step);
+    controller->ramped_current.q = clamp_float(controller->target_current.q,
+                                               controller->ramped_current.q - step,
+                                               controller->ramped_current.q + step);
+}
+
+static void current_controller_reset_state(CurrentController *controller)
+{
+    controller->target_current.d = 0.0f;
+    controller->target_current.q = 0.0f;
+    controller->ramped_current.d = 0.0f;
+    controller->ramped_current.q = 0.0f;
+    controller->measured_current.d = 0.0f;
+    controller->measured_current.q = 0.0f;
+    controller->integral_voltage.d = 0.0f;
+    controller->integral_voltage.q = 0.0f;
+    controller->output_voltage.d = 0.0f;
+    controller->output_voltage.q = 0.0f;
 }
