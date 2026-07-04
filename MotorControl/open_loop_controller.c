@@ -54,8 +54,35 @@ uint32_t open_loop_controller_update(OpenLoopController *controller,
         return 0U;
     }
 
-    float prev_vd = controller->voltage_dq.d;
-    float prev_vel = controller->electrical_phase_vel;
+    if (open_loop_controller_update_phase(controller, dt) == 0U) {
+        return 0U;
+    }
+
+    float pwm_phase = wrap_pm_pi(controller->electrical_phase +
+                                 OPEN_LOOP_PWM_PHASE_ADVANCE_PERIODS * dt *
+                                     controller->electrical_phase_vel);
+    if (foc_controller_apply_voltage(foc_controller,
+                                     controller->voltage_dq.d,
+                                     controller->voltage_dq.q,
+                                     pwm_phase) == 0U) {
+        open_loop_controller_set_enabled(controller, 0U);
+        return 0U;
+    }
+
+    return 1U;
+}
+
+uint32_t open_loop_controller_update_phase(OpenLoopController *controller, float dt)
+{
+    float prev_vd;
+    float prev_vel;
+
+    if (controller == 0) {
+        return 0U;
+    }
+
+    prev_vd = controller->voltage_dq.d;
+    prev_vel = controller->electrical_phase_vel;
 
     if (controller->enabled == 0U) {
         controller->target_voltage_mod = 0.0f;
@@ -73,18 +100,7 @@ uint32_t open_loop_controller_update(OpenLoopController *controller,
     controller->electrical_phase = wrap_pm_pi(controller->electrical_phase +
                                              controller->electrical_phase_vel * dt);
 
-    float pwm_phase = wrap_pm_pi(controller->electrical_phase +
-                                 OPEN_LOOP_PWM_PHASE_ADVANCE_PERIODS * dt *
-                                     controller->electrical_phase_vel);
-    if (foc_controller_apply_voltage(foc_controller,
-                                     controller->voltage_dq.d,
-                                     controller->voltage_dq.q,
-                                     pwm_phase) == 0U) {
-        open_loop_controller_set_enabled(controller, 0U);
-        return 0U;
-    }
-
-    return 1U;
+    return (controller->enabled != 0U) ? 1U : 0U;
 }
 
 void open_loop_controller_get_status(const OpenLoopController *controller,

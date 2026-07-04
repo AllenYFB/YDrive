@@ -11,14 +11,15 @@
 
 #define MONITOR_PRINT_PERIOD_MS 1000U
 
-static void monitor_task_init_hardware(void);
+static void monitor_task_send_boot_msg(void);
 static void monitor_task_print_once(void);
+static void monitor_task_send_line(const char *msg, int len);
 
 void monitor_task(void *argument)
 {
     (void)argument;
 
-    monitor_task_init_hardware();
+    monitor_task_send_boot_msg();
 
     for (;;) {
         monitor_task_print_once();
@@ -26,69 +27,89 @@ void monitor_task(void *argument)
     }
 }
 
-static void monitor_task_init_hardware(void)
+static void monitor_task_send_boot_msg(void)
 {
     static const uint8_t boot_msg[] = "YDrive boot\r\n";
 
-    HAL_GPIO_WritePin(EN_GATE_GPIO_Port, EN_GATE_Pin, GPIO_PIN_RESET);
     osDelay(1000);
     (void)CDC_Transmit_FS((uint8_t *)boot_msg, sizeof(boot_msg) - 1U);
-
-    pwm_adc_init();
-    pwm_adc_start_timing();
 }
 
 static void monitor_task_print_once(void)
 {
-    static uint32_t last_adc_count;
-    static uint32_t last_current_count;
-    char msg[224];
-    PwmAdcStatus pwm_adc_status;
-    MotorAxisStatus control_status;
-    GPIO_PinState nfault_state = HAL_GPIO_ReadPin(nFAULT_GPIO_Port, nFAULT_Pin);
+    static uint32_t prev_adc_irq_count;
+    static uint32_t prev_current_sample_count;
+    char msg[160];
+    PwmAdcStatus pwm_adc;
+    MotorAxisStatus axis;
+    GPIO_PinState nfault_pin = HAL_GPIO_ReadPin(nFAULT_GPIO_Port, nFAULT_Pin);
 
-    pwm_adc_get_status(&pwm_adc_status);
-    motor_axis_get_status(&control_status);
+    pwm_adc_get_status(&pwm_adc);
+    motor_axis_get_status(&axis);
 
-    uint32_t adc_hz = pwm_adc_status.adc_irq_count - last_adc_count;
-    uint32_t current_hz = pwm_adc_status.current_meas_count - last_current_count;
-    last_adc_count = pwm_adc_status.adc_irq_count;
-    last_current_count = pwm_adc_status.current_meas_count;
+    uint32_t adc_irq_rate_hz = pwm_adc.adc_irq_count - prev_adc_irq_count;
+    uint32_t current_sample_rate_hz = pwm_adc.current_meas_count - prev_current_sample_count;
+    prev_adc_irq_count = pwm_adc.adc_irq_count;
+    prev_current_sample_count = pwm_adc.current_meas_count;
 
-    int32_t phase_mrad = (int32_t)(control_status.open_loop_electrical_phase * 1000.0f);
-    int32_t vel_mrad_s = (int32_t)(control_status.open_loop_electrical_phase_vel * 1000.0f);
-    int32_t v_milli = (int32_t)(control_status.open_loop_voltage_mod * 1000.0f);
+    int32_t phase_mrad = (int32_t)(axis.open_loop_electrical_phase * 1000.0f);
+    int32_t velocity_mrad_s = (int32_t)(axis.open_loop_electrical_phase_vel * 1000.0f);
+    int32_t voltage_mod_milli = (int32_t)(axis.open_loop_voltage_mod * 1000.0f);
+    int32_t id_measured_ma = (int32_t)(axis.current_id_measured * 1000.0f);
+    int32_t iq_measured_ma = (int32_t)(axis.current_iq_measured * 1000.0f);
+    int32_t iq_target_ma = (int32_t)(axis.current_iq_setpoint * 1000.0f);
+    int32_t vd_mod_milli = (int32_t)(axis.current_vd_mod * 1000.0f);
+    int32_t vq_mod_milli = (int32_t)(axis.current_vq_mod * 1000.0f);
 
     int len = snprintf(msg, sizeof(msg),
-                       "nFAULT=%u adc_irq=%lu current=%lu dc_cal=%lu dir=%u axis=%lu deadline=%lu mode=%lu out=%lu cal=%u open=%lu phase_mrad=%ld vel_mrad_s=%ld v_milli=%ld pwm=%lu/%lu/%lu vbus=%lu ib=%lu ic=%lu off_b=%ld off_c=%ld ia=%ld ibc=%ld icc=%ld\r\n",
-                       (nfault_state == GPIO_PIN_SET) ? 1U : 0U,
-                       (unsigned long)adc_hz,
-                       (unsigned long)current_hz,
-                       (unsigned long)pwm_adc_status.dc_cal_count,
-                       pwm_adc_status.counting_down,
-                       (unsigned long)control_status.loop_count,
-                       (unsigned long)control_status.deadline_miss_count,
-                       (unsigned long)control_status.mode,
-                       (unsigned long)control_status.output_active,
-                       pwm_adc_status.offset_calibrated,
-                       (unsigned long)control_status.open_loop_enable,
-                       (long)phase_mrad,
-                       (long)vel_mrad_s,
-                       (long)v_milli,
-                       (unsigned long)control_status.pwm_a,
-                       (unsigned long)control_status.pwm_b,
-                       (unsigned long)control_status.pwm_c,
-                       (unsigned long)pwm_adc_status.vbus_raw,
-                       (unsigned long)pwm_adc_status.ib_raw,
-                       (unsigned long)pwm_adc_status.ic_raw,
-                       (long)pwm_adc_status.ib_offset,
-                       (long)pwm_adc_status.ic_offset,
-                       (long)control_status.latest_ia,
-                       (long)control_status.latest_ib,
-                       (long)control_status.latest_ic);
+                       "sys: nfault=%u mode=%lu out=%lu cal=%u loop=%lu miss=%lu adc_hz=%lu cur_hz=%lu\r\n",
+                       (nfault_pin == GPIO_PIN_SET) ? 1U : 0U,
+                       (unsigned long)axis.mode,
+                       (unsigned long)axis.output_active,
+                       pwm_adc.offset_calibrated,
+                       (unsigned long)axis.loop_count,
+                       (unsigned long)axis.deadline_miss_count,
+                       (unsigned long)adc_irq_rate_hz,
+                       (unsigned long)current_sample_rate_hz);
+    monitor_task_send_line(msg, len);
 
-    if (len > 0) {
-        (void)CDC_Transmit_FS((uint8_t *)msg, (uint16_t)strlen(msg));
-    }
+    len = snprintf(msg, sizeof(msg),
+                   "ctrl: open=%lu phase_mrad=%ld vel_mrad_s=%ld v_milli=%ld iq_sp_ma=%ld id_ma=%ld iq_ma=%ld vd_milli=%ld vq_milli=%ld ierr=%lu\r\n",
+                       (unsigned long)axis.open_loop_enable,
+                       (long)phase_mrad,
+                       (long)velocity_mrad_s,
+                       (long)voltage_mod_milli,
+                       (long)iq_target_ma,
+                       (long)id_measured_ma,
+                       (long)iq_measured_ma,
+                       (long)vd_mod_milli,
+                       (long)vq_mod_milli,
+                       (unsigned long)axis.current_error);
+    monitor_task_send_line(msg, len);
+
+    len = snprintf(msg, sizeof(msg),
+                       "adc: dir=%u dc_cal=%lu vbus=%lu raw=%lu/%lu off=%ld/%ld iabc=%ld/%ld/%ld pwm=%lu/%lu/%lu\r\n",
+                       pwm_adc.counting_down,
+                       (unsigned long)pwm_adc.dc_cal_count,
+                       (unsigned long)pwm_adc.vbus_raw,
+                       (unsigned long)pwm_adc.ib_raw,
+                       (unsigned long)pwm_adc.ic_raw,
+                       (long)pwm_adc.ib_offset,
+                       (long)pwm_adc.ic_offset,
+                       (long)axis.latest_ia,
+                       (long)axis.latest_ib,
+                       (long)axis.latest_ic,
+                       (unsigned long)axis.pwm_a,
+                       (unsigned long)axis.pwm_b,
+                       (unsigned long)axis.pwm_c);
+    monitor_task_send_line(msg, len);
 }
 
+static void monitor_task_send_line(const char *msg, int len)
+{
+    if ((msg == 0) || (len <= 0)) {
+        return;
+    }
+
+    (void)CDC_Transmit_FS((uint8_t *)msg, (uint16_t)strlen(msg));
+}

@@ -47,6 +47,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/arm_cos_f32.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/arm_sin_f32.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/current_controller.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/foc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/motor_axis.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/open_loop_controller.c

@@ -9,6 +9,7 @@
 static void usb_command_send(const char *msg);
 static void usb_command_handle_line(char *line);
 static void usb_command_handle_open(const UsbCommandLine *command);
+static void usb_command_handle_current(const UsbCommandLine *command);
 static void usb_command_handle_stop(void);
 static void usb_command_handle_help(void);
 static char *skip_spaces(char *p);
@@ -49,6 +50,10 @@ static void usb_command_handle_line(char *line)
         usb_command_handle_open(&command);
         break;
 
+    case USB_COMMAND_CURRENT:
+        usb_command_handle_current(&command);
+        break;
+
     case USB_COMMAND_STOP:
     case USB_COMMAND_IDLE:
         usb_command_handle_stop();
@@ -79,6 +84,12 @@ UsbCommandLine usb_command_parse_line(char *line)
     if (strncmp(line, "open", 4U) == 0) {
         command.type = USB_COMMAND_OPEN;
         command.args = line + 4;
+        return command;
+    }
+
+    if (strncmp(line, "cur", 3U) == 0) {
+        command.type = USB_COMMAND_CURRENT;
+        command.args = line + 3;
         return command;
     }
 
@@ -133,6 +144,36 @@ static void usb_command_handle_open(const UsbCommandLine *command)
     usb_command_send("OK open\r\n");
 }
 
+static void usb_command_handle_current(const UsbCommandLine *command)
+{
+    float iq_setpoint;
+    float electrical_phase_vel;
+    char *args;
+
+    if (command == 0) {
+        usb_command_send("ERR cur usage\r\n");
+        return;
+    }
+
+    args = command->args;
+
+    if ((parse_float_arg(&args, &iq_setpoint) == 0U) ||
+        (parse_float_arg(&args, &electrical_phase_vel) == 0U)) {
+        usb_command_send("ERR cur usage\r\n");
+        return;
+    }
+
+    args = skip_spaces(args);
+    if (*args != '\0') {
+        usb_command_send("ERR cur args\r\n");
+        return;
+    }
+
+    motor_axis_set_open_loop_current_target(iq_setpoint, electrical_phase_vel);
+    motor_axis_set_open_loop_current_enabled(1U);
+    usb_command_send("OK cur\r\n");
+}
+
 static void usb_command_handle_stop(void)
 {
     motor_axis_set_open_loop_enabled(0U);
@@ -141,7 +182,7 @@ static void usb_command_handle_stop(void)
 
 static void usb_command_handle_help(void)
 {
-    usb_command_send("cmd: open <voltage_mod> <electrical_rad_s>, stop\r\n");
+    usb_command_send("cmd: open <voltage_mod> <electrical_rad_s>, cur <iq_amp> <electrical_rad_s>, stop\r\n");
 }
 
 static char *skip_spaces(char *p)

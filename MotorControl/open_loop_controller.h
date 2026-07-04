@@ -25,6 +25,7 @@ void open_loop_controller_set_enabled(OpenLoopController *controller, uint32_t e
 uint32_t open_loop_controller_update(OpenLoopController *controller,
                                      FocController *foc_controller,
                                      float dt);
+uint32_t open_loop_controller_update_phase(OpenLoopController *controller, float dt);
 void open_loop_controller_get_status(const OpenLoopController *controller,
                                      OpenLoopController *status);
 
