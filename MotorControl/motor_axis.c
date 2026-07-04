@@ -1,5 +1,7 @@
 #include "motor_axis.h"
 
+#include <math.h>
+
 #include "current_controller.h"
 #include "foc.h"
 #include "open_loop_controller.h"
@@ -10,12 +12,7 @@
  */
 #define CURRENT_MEAS_WATCHDOG_TIMEOUT_MS 10U
 #define MOTOR_AXIS_PERIOD_SEC 0.000125f
-#define OPEN_CURRENT_LOCKIN_TIME_SEC 0.4f
-/* Keep the open-loop current startup phase fixed. ODrive uses a small
- * ramp_distance for lock-in, but without encoder feedback this project starts
- * more gently by building current first, then ramping phase velocity.
- */
-#define OPEN_CURRENT_LOCKIN_PHASE_RAD 0.0f
+#define OPEN_CURRENT_ALIGN_TIME_SEC 0.5f
 
 osThreadId_t motorAxisTaskHandle;
 
@@ -28,8 +25,8 @@ typedef struct {
     CurrentController current;
     FocController foc;
     float open_current_run_vel;
-    float open_current_lockin_phase;
-    float open_current_lockin_elapsed;
+    float open_current_start_phase;
+    float open_current_align_elapsed;
 } MotorAxis;
 
 static MotorAxis motor_axis = {
@@ -41,7 +38,8 @@ static void motor_axis_init(void);
 static void motor_axis_run_once(void);
 static uint32_t motor_axis_update_controller(const PhaseCurrentSample *sample);
 static uint32_t motor_axis_run_open_loop_voltage(void);
-static uint32_t motor_axis_run_open_loop_current_lockin(const PhaseCurrentSample *sample);
+static uint32_t motor_axis_run_open_loop_current_align(const PhaseCurrentSample *sample);
+static uint32_t motor_axis_run_open_loop_current_ramp(const PhaseCurrentSample *sample);
 static uint32_t motor_axis_run_open_loop_current_run(const PhaseCurrentSample *sample);
 static uint32_t motor_axis_run_open_loop_current_at_phase(const PhaseCurrentSample *sample,
                                                          float current_phase,
@@ -118,10 +116,10 @@ void motor_axis_start_open_current(float iq_setpoint, float electrical_phase_vel
 {
     open_loop_controller_set_target(&motor_axis.open_loop, 0.0f, 0.0f);
     current_controller_set_target(&motor_axis.current, 0.0f, iq_setpoint);
-    motor_axis.mode = MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_LOCKIN;
+    motor_axis.mode = MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_ALIGN;
     motor_axis.open_current_run_vel = electrical_phase_vel;
-    motor_axis.open_current_lockin_phase = motor_axis.open_loop.electrical_phase;
-    motor_axis.open_current_lockin_elapsed = 0.0f;
+    motor_axis.open_current_start_phase = motor_axis.open_loop.electrical_phase;
+    motor_axis.open_current_align_elapsed = 0.0f;
     open_loop_controller_set_enabled(&motor_axis.open_loop, 1U);
     current_controller_clear_error(&motor_axis.current);
     current_controller_set_enabled(&motor_axis.current, 1U);
@@ -184,8 +182,11 @@ static uint32_t motor_axis_update_controller(const PhaseCurrentSample *sample)
     case MOTOR_AXIS_MODE_OPEN_LOOP_VOLTAGE:
         return motor_axis_run_open_loop_voltage();
 
-    case MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_LOCKIN:
-        return motor_axis_run_open_loop_current_lockin(sample);
+    case MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_ALIGN:
+        return motor_axis_run_open_loop_current_align(sample);
+
+    case MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_RAMP:
+        return motor_axis_run_open_loop_current_ramp(sample);
 
     case MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_RUN:
         return motor_axis_run_open_loop_current_run(sample);
@@ -203,32 +204,46 @@ static uint32_t motor_axis_run_open_loop_voltage(void)
                                        MOTOR_AXIS_PERIOD_SEC);
 }
 
-static uint32_t motor_axis_run_open_loop_current_lockin(const PhaseCurrentSample *sample)
+static uint32_t motor_axis_run_open_loop_current_align(const PhaseCurrentSample *sample)
 {
-    float x;
-    float phase;
+    if (sample == 0) {
+        return 0U;
+    }
+
+    motor_axis.open_current_align_elapsed += MOTOR_AXIS_PERIOD_SEC;
+    motor_axis.open_loop.electrical_phase = motor_axis.open_current_start_phase;
+    motor_axis.open_loop.electrical_phase_vel = 0.0f;
+
+    if (motor_axis.open_current_align_elapsed >= OPEN_CURRENT_ALIGN_TIME_SEC) {
+        open_loop_controller_set_target(&motor_axis.open_loop,
+                                        0.0f,
+                                        motor_axis.open_current_run_vel);
+        motor_axis.mode = MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_RAMP;
+    }
+
+    return motor_axis_run_open_loop_current_at_phase(sample,
+                                                     motor_axis.open_loop.electrical_phase,
+                                                     0.0f);
+}
+
+static uint32_t motor_axis_run_open_loop_current_ramp(const PhaseCurrentSample *sample)
+{
+    uint32_t active;
+    float target_vel;
 
     if (sample == 0) {
         return 0U;
     }
 
-    motor_axis.open_current_lockin_elapsed += MOTOR_AXIS_PERIOD_SEC;
-    x = clamp_float(motor_axis.open_current_lockin_elapsed / OPEN_CURRENT_LOCKIN_TIME_SEC,
-                    0.0f,
-                    1.0f);
-    phase = wrap_pm_pi(motor_axis.open_current_lockin_phase +
-                       OPEN_CURRENT_LOCKIN_PHASE_RAD * x);
-    motor_axis.open_loop.electrical_phase = phase;
-    motor_axis.open_loop.electrical_phase_vel = 0.0f;
+    target_vel = motor_axis.open_current_run_vel;
+    active = motor_axis_run_open_loop_current_run(sample);
 
-    if (x >= 1.0f) {
-        open_loop_controller_set_target(&motor_axis.open_loop,
-                                        0.0f,
-                                        motor_axis.open_current_run_vel);
+    if ((active != 0U) &&
+        (fabsf(motor_axis.open_loop.electrical_phase_vel - target_vel) < 0.001f)) {
         motor_axis.mode = MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_RUN;
     }
 
-    return motor_axis_run_open_loop_current_at_phase(sample, phase, 0.0f);
+    return active;
 }
 
 static uint32_t motor_axis_run_open_loop_current_run(const PhaseCurrentSample *sample)
