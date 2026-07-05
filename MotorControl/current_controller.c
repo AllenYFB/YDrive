@@ -4,7 +4,6 @@
 
 #include "arm_sin_cos_f32.h"
 
-#define CURRENT_DEFAULT_PHASE_GAIN 0.01f
 #define CURRENT_DEFAULT_P_GAIN 0.002f
 #define CURRENT_DEFAULT_I_GAIN 1.0f
 #define CURRENT_DEFAULT_LIMIT 5.0f
@@ -34,7 +33,6 @@ void current_controller_init(CurrentController *controller)
         return;
     }
 
-    controller->phase_current_gain = CURRENT_DEFAULT_PHASE_GAIN;
     controller->current_limit = CURRENT_DEFAULT_LIMIT;
     controller->max_voltage_mod = CURRENT_DEFAULT_MAX_MOD;
     controller->p_gain = CURRENT_DEFAULT_P_GAIN;
@@ -84,16 +82,6 @@ void current_controller_set_gains(CurrentController *controller, float p_gain, f
 
     controller->p_gain = clamp_float(p_gain, 0.0f, 1.0f);
     controller->i_gain = clamp_float(i_gain, 0.0f, 1000.0f);
-}
-
-void current_controller_set_phase_current_gain(CurrentController *controller,
-                                               float phase_current_gain)
-{
-    if (controller == 0) {
-        return;
-    }
-
-    controller->phase_current_gain = clamp_float(phase_current_gain, -1.0f, 1.0f);
 }
 
 void current_controller_set_limits(CurrentController *controller,
@@ -191,8 +179,8 @@ static void current_controller_measure_current(const CurrentController *controll
                                                float *id,
                                                float *iq)
 {
-    float ib = (float)sample->ib * controller->phase_current_gain;
-    float ic = (float)sample->ic * controller->phase_current_gain;
+    float ib = sample->ib;
+    float ic = sample->ic;
     float i_alpha = -ib - ic;
     float i_beta = ONE_BY_SQRT3 * (ib - ic);
     float c = arm_cos_f32(current_phase);

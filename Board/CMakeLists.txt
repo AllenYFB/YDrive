@@ -48,11 +48,13 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/arm_cos_f32.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/arm_sin_f32.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/current_controller.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/encoder.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/foc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/motor_axis.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/open_loop_controller.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/pwm_adc.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/power_stage.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/utils.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Drivers/DRV8301/drv8301.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../Communication/usb_command.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../Tasks/monitor_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../Tasks/tasks_init.c
@@ -62,6 +64,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Drivers/DRV8301
     ${CMAKE_CURRENT_SOURCE_DIR}/../Communication
     ${CMAKE_CURRENT_SOURCE_DIR}/../Tasks
 )

@@ -13,7 +13,7 @@ extern "C" {
 typedef enum {
     MOTOR_AXIS_MODE_IDLE = 0,
     MOTOR_AXIS_MODE_OPEN_LOOP_VOLTAGE = 1,
-    MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT = 2,
+    MOTOR_AXIS_MODE_CLOSED_LOOP_CURRENT = 2,
 } MotorAxisMode;
 
 typedef struct {
@@ -24,9 +24,9 @@ typedef struct {
 } MotorAxisRuntimeStatus;
 
 typedef struct {
-    int32_t ia;
-    int32_t ib;
-    int32_t ic;
+    float ia;
+    float ib;
+    float ic;
 } MotorAxisPhaseCurrentStatus;
 
 typedef struct {
@@ -37,6 +37,16 @@ typedef struct {
 } MotorAxisOpenLoopStatus;
 
 typedef struct {
+    uint32_t enabled;
+    uint32_t ready;
+    uint32_t error;
+    int32_t shadow_count;
+    int32_t count_in_cpr;
+    float electrical_phase;
+    float electrical_phase_vel;
+} MotorAxisEncoderStatus;
+
+typedef struct {
     float id_setpoint;
     float iq_setpoint;
     float id_ramped_setpoint;
@@ -45,7 +55,6 @@ typedef struct {
     float iq_measured;
     float vd_mod;
     float vq_mod;
-    float phase_gain;
     float p_gain;
     float i_gain;
     float limit;
@@ -63,6 +72,7 @@ typedef struct {
     MotorAxisRuntimeStatus runtime;
     MotorAxisPhaseCurrentStatus phase_current;
     MotorAxisOpenLoopStatus open_loop;
+    MotorAxisEncoderStatus encoder;
     MotorAxisCurrentStatus current;
     MotorAxisPwmStatus pwm;
 } MotorAxisStatus;
@@ -73,11 +83,10 @@ void motor_axis_task(void *argument);
 void motor_axis_signal_current_meas_from_isr(void);
 void motor_axis_get_status(MotorAxisStatus *status);
 void motor_axis_start_open_voltage(float voltage_mod, float electrical_phase_vel);
-void motor_axis_start_open_current(float iq_setpoint, float electrical_phase_vel);
+void motor_axis_start_current(float iq_setpoint);
 void motor_axis_stop(void);
 void motor_axis_set_current_pi(float p_gain, float i_gain);
-void motor_axis_set_current_config(float phase_current_gain,
-                                   float current_limit,
+void motor_axis_set_current_config(float current_limit,
                                    float max_voltage_mod);
 
 #ifdef __cplusplus

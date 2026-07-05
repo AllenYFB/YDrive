@@ -39,6 +39,17 @@ static inline uint32_t clamp_u32(uint32_t value, uint32_t min_value, uint32_t ma
     return value;
 }
 
+static inline int32_t mod_i32(int32_t value, int32_t modulus)
+{
+    int32_t result = value % modulus;
+
+    if (result < 0) {
+        result += modulus;
+    }
+
+    return result;
+}
+
 int svm(float alpha, float beta, float *t_a, float *t_b, float *t_c);
 float wrap_pm(float x, float y);
 float fmodf_pos(float x, float y);

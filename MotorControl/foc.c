@@ -1,7 +1,7 @@
 #include "foc.h"
 
 #include "arm_sin_cos_f32.h"
-#include "pwm_adc.h"
+#include "power_stage.h"
 
 static uint32_t foc_controller_enqueue_modulation(FocController *controller,
                                                  float mod_alpha,
@@ -13,9 +13,9 @@ void foc_controller_init(FocController *controller)
         return;
     }
 
-    controller->pwm_a = PWM_CENTER_TICKS;
-    controller->pwm_b = PWM_CENTER_TICKS;
-    controller->pwm_c = PWM_CENTER_TICKS;
+    controller->pwm_a = POWER_STAGE_PWM_CENTER_TICKS;
+    controller->pwm_b = POWER_STAGE_PWM_CENTER_TICKS;
+    controller->pwm_c = POWER_STAGE_PWM_CENTER_TICKS;
     controller->mod_alpha = 0.0f;
     controller->mod_beta = 0.0f;
     controller->error = 0U;
@@ -57,15 +57,15 @@ static uint32_t foc_controller_enqueue_modulation(FocController *controller,
 
     if (svm(mod_alpha, mod_beta, &t_a, &t_b, &t_c) != 0) {
         controller->error |= FOC_ERROR_MODULATION_MAGNITUDE;
-        pwm_adc_set_gate_enabled(0U);
-        pwm_adc_write_pwm_neutral();
+        power_stage_enable_output(0U);
+        power_stage_write_neutral();
         return 0U;
     }
 
-    PwmTicks pwm = {
-        .phase_a = (uint32_t)(t_a * (float)PWM_PERIOD_TICKS),
-        .phase_b = (uint32_t)(t_b * (float)PWM_PERIOD_TICKS),
-        .phase_c = (uint32_t)(t_c * (float)PWM_PERIOD_TICKS),
+    PhasePwm pwm = {
+        .phase_a = (uint32_t)(t_a * (float)POWER_STAGE_PWM_PERIOD_TICKS),
+        .phase_b = (uint32_t)(t_b * (float)POWER_STAGE_PWM_PERIOD_TICKS),
+        .phase_c = (uint32_t)(t_c * (float)POWER_STAGE_PWM_PERIOD_TICKS),
     };
 
     controller->mod_alpha = mod_alpha;
@@ -74,6 +74,6 @@ static uint32_t foc_controller_enqueue_modulation(FocController *controller,
     controller->pwm_b = pwm.phase_b;
     controller->pwm_c = pwm.phase_c;
 
-    pwm_adc_write_pwm(&pwm);
+    power_stage_write_pwm(&pwm);
     return 1U;
 }

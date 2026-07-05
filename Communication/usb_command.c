@@ -169,7 +169,6 @@ static void usb_command_handle_open(const UsbCommandLine *command)
 static void usb_command_handle_current(const UsbCommandLine *command)
 {
     float iq_setpoint;
-    float electrical_phase_vel;
     char *args;
 
     if (command == 0) {
@@ -179,25 +178,33 @@ static void usb_command_handle_current(const UsbCommandLine *command)
 
     args = command->args;
 
-    if ((parse_float_arg(&args, &iq_setpoint) == 0U) ||
-        (parse_float_arg(&args, &electrical_phase_vel) == 0U)) {
+    if (parse_float_arg(&args, &iq_setpoint) == 0U) {
         usb_command_send("ERR cur usage\r\n");
         return;
     }
 
     args = skip_spaces(args);
     if (*args != '\0') {
-        usb_command_send("ERR cur args\r\n");
-        return;
+        float unused;
+
+        if (parse_float_arg(&args, &unused) == 0U) {
+            usb_command_send("ERR cur args\r\n");
+            return;
+        }
+
+        args = skip_spaces(args);
+        if (*args != '\0') {
+            usb_command_send("ERR cur args\r\n");
+            return;
+        }
     }
 
-    motor_axis_start_open_current(iq_setpoint, electrical_phase_vel);
+    motor_axis_start_current(iq_setpoint);
     usb_command_send("OK cur\r\n");
 }
 
 static void usb_command_handle_current_param(const UsbCommandLine *command)
 {
-    float phase_current_gain;
     float current_limit;
     float max_voltage_mod;
     char *args;
@@ -213,16 +220,14 @@ static void usb_command_handle_current_param(const UsbCommandLine *command)
         char msg[128];
         motor_axis_get_status(&status);
         (void)snprintf(msg, sizeof(msg),
-                       "cparam gain_u=%ld limit_ma=%ld max_mod_milli=%ld\r\n",
-                       (long)(status.current.phase_gain * 1000000.0f),
+                       "cparam limit_ma=%ld max_mod_milli=%ld\r\n",
                        (long)(status.current.limit * 1000.0f),
                        (long)(status.current.max_voltage_mod * 1000.0f));
         usb_command_send(msg);
         return;
     }
 
-    if ((parse_float_arg(&args, &phase_current_gain) == 0U) ||
-        (parse_float_arg(&args, &current_limit) == 0U) ||
+    if ((parse_float_arg(&args, &current_limit) == 0U) ||
         (parse_float_arg(&args, &max_voltage_mod) == 0U)) {
         usb_command_send("ERR cparam usage\r\n");
         return;
@@ -234,7 +239,7 @@ static void usb_command_handle_current_param(const UsbCommandLine *command)
         return;
     }
 
-    motor_axis_set_current_config(phase_current_gain, current_limit, max_voltage_mod);
+    motor_axis_set_current_config(current_limit, max_voltage_mod);
     usb_command_send("OK cparam\r\n");
 }
 
@@ -286,7 +291,7 @@ static void usb_command_handle_stop(void)
 
 static void usb_command_handle_help(void)
 {
-    usb_command_send("cmd: open <voltage_mod> <electrical_rad_s>, cur <iq_amp> <electrical_rad_s>, cparam [gain limit max_mod], cgain [p i], stop\r\n");
+    usb_command_send("cmd: open <voltage_mod> <electrical_rad_s>, cur <iq_amp>, cparam [limit max_mod], cgain [p i], stop\r\n");
 }
 
 static char *skip_spaces(char *p)
