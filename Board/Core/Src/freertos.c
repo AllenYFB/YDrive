@@ -26,7 +26,10 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "usb_device.h"
-#include "tasks_init.h"
+#include "axis.h"
+#include "board.h"
+#include "motor.h"
+#include "usb_command.h"
 
 /* USER CODE END Includes */
 
@@ -100,7 +103,6 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
-  tasks_init();
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -119,11 +121,16 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* init code for USB_DEVICE */
-  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
+  motor_para_init();
+  motor_setup();
+  motor_control_start();
+
   /* Infinite loop */
   for(;;)
   {
+    USBcommander_run();
+    run_state_machine_loop();
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */

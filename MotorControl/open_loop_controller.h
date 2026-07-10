@@ -1,32 +1,33 @@
-#ifndef OPEN_LOOP_CONTROLLER_H
-#define OPEN_LOOP_CONTROLLER_H
 
-#include <stdint.h>
+#ifndef __OPEN_LOOP_CONTROLLER_LIB_H
+#define __OPEN_LOOP_CONTROLLER_LIB_H
 
-#include "foc.h"
 #include "utils.h"
 
-typedef struct {
-    float max_voltage_mod_ramp;
-    float max_electrical_phase_vel_ramp;
-    float target_voltage_mod;
-    float target_electrical_phase_vel;
-    DqVector voltage_dq;
-    float electrical_phase;
-    float electrical_phase_vel;
-    uint32_t enabled;
-} OpenLoopController;
 
-void open_loop_controller_init(OpenLoopController *controller);
-void open_loop_controller_set_target(OpenLoopController *controller,
-                                     float voltage_mod,
-                                     float electrical_phase_vel);
-void open_loop_controller_set_enabled(OpenLoopController *controller, uint32_t enable);
-uint32_t open_loop_controller_update(OpenLoopController *controller,
-                                     FocController *foc_controller,
-                                     float dt);
-uint32_t open_loop_controller_update_phase(OpenLoopController *controller, float dt);
-void open_loop_controller_get_status(const OpenLoopController *controller,
-                                     OpenLoopController *status);
+/****************************************************************************/
+typedef struct 
+{
+	float max_voltage_ramp_; // [V/s]
+	float max_phase_vel_ramp_; // [rad/s^2]
+
+	// Inputs
+	float target_vel_;
+	float target_voltage_;
+
+	// State/Outputs
+	uint32_t timestamp_;
+	float2D Vdq_setpoint_;
+	float phase_;
+	float phase_vel_;
+	float total_distance_;
+} OPENLOOP_struct;
+
+extern  OPENLOOP_struct openloop_controller_;
+/****************************************************************************/
+void open_loop_controller_start(void);
+void open_loop_controller_update(uint32_t timestamp);
+/****************************************************************************/
 
 #endif
+

@@ -1,293 +1,313 @@
-﻿# YDrive
+# YDrive
 
-YDrive 是一个参考 ODrive v3 / ODrive firmware v0.5.1 思路整理出来的 STM32F405 PMSM/FOC 学习工程。
+YDrive 是一个参考 ODrive v3 / ODrive firmware v0.5.6 架构整理出来的 STM32F405 PMSM/FOC 学习工程。
 
-当前目标不是一次性复刻完整 ODrive，而是把关键链路拆开手撕：
+当前阶段已经完成：
+
+- TIM1 中心对齐三相互补 PWM
+- ADC1/ADC2/ADC3 injected 同步采样
+- 母线电压采样
+- phase B / phase C 电流采样，phase A 由 `ia = -ib - ic` 计算
+- DC offset 校准
+- 电机相电阻测量
+- 电机相电感测量
+- 开环电压旋转控制
+- USB CDC 命令控制
+
+下一阶段重点是接入编码器，然后做电流闭环、速度闭环和位置闭环。
+
+## 当前架构
+
+实时控制链路模仿 ODrive v0.5.6：
 
 ```text
 TIM1 center-aligned PWM
-  -> TIM1 TRGO update 触发 ADC injected
-  -> ADC2/ADC3 采 phase B / phase C 电流
-  -> dir=0 作为真实电流采样窗口
-  -> motor_axis_task 被唤醒
-  -> 开环电压 / 开环电流控制
-  -> FOC / SVPWM
-  -> 写入下一拍 PWM
+  -> TIM1 update interrupt
+     -> 判断 TIM1->CR1 DIR
+     -> 向上计数：触发 ControlLoop_IRQn
+     -> 向下计数：CCR 临时写 50%
+
+ControlLoop_IRQHandler
+  -> fetch_and_reset_adcs()
+     -> ADC1 JDR1: vbus
+     -> ADC2 JDR1: phase B current
+     -> ADC3 JDR1: phase C current
+  -> current_meas_cb()
+     -> 扣除 DC_calib
+     -> Clarke transform
+     -> 测量模式下处理 R/L 输入侧
+  -> axis_control_loop_cb()
+     -> open_loop_controller_update()
+  -> 等待下一次 injected ADC 完成
+  -> fetch_and_reset_adcs()
+  -> dc_calib_cb()
+  -> pwm_update_cb()
+     -> 测量模式输出 R/L 测试电压
+     -> 正常模式输出 open-loop FOC voltage
 ```
 
-## 当前状态
+`ControlLoop_IRQn` 当前映射到 `OTG_HS_IRQn`：
 
-- STM32F405 + FreeRTOS CMSIS-RTOS2 + USB CDC
-- TIM1 三相互补 PWM，center-aligned 模式
-- ADC1/ADC2/ADC3 injected conversion
-- ADC2/ADC3 采样 phase B / phase C 电流
-- ODrive 风格 `dir=0` 真实电流采样，`dir=1` DC_CAL 零偏更新
-- 真实电流控制节拍约 8 kHz
-- `MotorAxis` 作为电机轴主对象
-- 支持开环电压旋转：`open`
-- 支持开环相位 + 电流 PI 测试模式：`cur`
-- 支持 USB 查看/设置电流环参数：`cparam` / `cgain`
-- USB CDC ASCII 命令控制
-- 监控输出分为 `sys` / `ctrl` / `adc` 三组
+```c
+#define ControlLoop_IRQHandler OTG_HS_IRQHandler
+#define ControlLoop_IRQn OTG_HS_IRQn
+```
 
 ## 目录结构
 
 ```text
 YDrive/
-  Board/          CubeMX 生成代码、CMake、HAL、USB、FreeRTOS
-  MotorControl/   PWM/ADC、MotorAxis、FOC、开环控制、电流环
+  Board/          CubeMX 生成代码、HAL、USB、FreeRTOS、CMake
   Communication/  USB CDC 命令解析
-  Tasks/          FreeRTOS 应用任务
-  Docs/           时序、SVPWM、环境说明笔记
+  MotorControl/   PWM/ADC 时序、FOC、Motor、Axis、开环控制
+  Docs/           环境和架构笔记
 ```
 
-职责划分：
+核心文件：
 
 ```text
-Board
-  -> 保持 CubeMX/HAL/USB/FreeRTOS 生成层
+MotorControl/board.c/.h
+  TIM1 PWM/ADC injected/ControlLoop IRQ/电流采样/母线采样
 
-Tasks
-  -> 创建和运行应用任务
-  -> monitor_task 打印状态
+MotorControl/motor.c/.h
+  电机参数、arm/disarm、DC calibration、电阻测量、电感测量、PWM 输出分发
 
-Communication
-  -> USB CDC ASCII 命令解析
+MotorControl/foc.c/.h
+  Clarke transform、逆 Park、SVM、PWM CCR 写入
 
-MotorControl
-  -> 电机控制主逻辑
-  -> PWM/ADC 时序
-  -> FOC/SVPWM
-  -> 开环电压控制
-  -> 开环电流 PI 测试
+MotorControl/open_loop_controller.c/.h
+  开环电角度、开环电角速度、电压斜坡、速度斜坡
+
+MotorControl/axis.c/.h
+  状态机、校准命令、开环状态入口、控制循环入口
+
+Communication/usb_command.c/.h
+  USB CDC ASCII 命令
 ```
 
-## 启动链路
+## 启动流程
 
 ```text
 main()
   -> MX_FREERTOS_Init()
      -> MX_USB_DEVICE_Init()
-     -> tasks_init()
-        -> monitor_task
-        -> motor_axis_task
+     -> defaultTask
+
+defaultTask
+  -> motor_para_init()
+  -> motor_setup()
+  -> motor_control_start()
+  -> loop:
+       USBcommander_run()
+       run_state_machine_loop()
+       osDelay(1)
 ```
 
-`motor_axis_task` 负责初始化并启动 PWM/ADC 时序；`monitor_task` 只负责发送 boot 消息和周期性打印状态。
+实时电机控制不放在 FreeRTOS task 中，而是由 TIM1 update 触发硬中断链路。
 
-## 控制时序
+## 电流采样
+
+ADC injected 采样：
 
 ```text
-TIM1 update/TRGO
-  -> ADC injected conversion
-  -> ADC IRQ
-  -> pwm_adc_trig_adc_cb()
-     -> ADC2 保存 ib_raw
-     -> ADC3 保存 ic_raw
-     -> dir=0:
-          计算 ia/ib/ic
-          current_meas_count++
-          motor_axis_signal_current_meas_from_isr()
-     -> dir=1:
-          更新 ib/ic offset
-
-motor_axis_task
-  -> 等待 MOTOR_AXIS_CURRENT_MEAS_FLAG
-  -> 读取 PhaseCurrentSample
-  -> 根据 mode 分发控制器
-  -> 写入 PWM
-  -> control_cycle_finished = 1
+ADC1->JDR1 = vbus
+ADC2->JDR1 = phase B current
+ADC3->JDR1 = phase C current
+phase A    = -phase B - phase C
 ```
 
-deadline 机制：
+电流换算在 `phase_current_from_adcval()`：
 
 ```text
-ADC ISR 到来时：
-  如果 output_active = 1
-  且上一拍 control_cycle_finished = 0
-  -> deadline_miss_count++
-  -> disarm
+adcval_bal  = adc - 2048
+amp_out_v   = 3.3 / 4096 * adcval_bal
+shunt_v     = amp_out_v / PHASE_CURRENT_GAIN
+current_A   = shunt_v / SHUNT_RESISTANCE
 ```
 
-## MotorControl 模块
+当前参数：
 
 ```text
-motor_axis.c/.h
-  电机轴主对象，负责控制模式、deadline、输出使能、状态汇总。
-
-pwm_adc.c/.h
-  TIM1 PWM、ADC injected、DC_CAL、相电流采样、EN_GATE。
-
-open_loop_controller.c/.h
-  开环电角度推进，支持电压开环，也给电流环提供开环 phase。
-
-current_controller.c/.h
-  Id/Iq 电流环雏形：
-    phase current -> Clarke/Park -> Id/Iq
-    Id/Iq error -> PI -> Vd/Vq
-    Vd/Vq -> FOC/SVM
-
-foc.c/.h
-  逆 Park、SVPWM、电压调制到 PWM ticks。
-
-utils.c/.h
-  clamp、wrap、SVPWM 基础数学工具。
-
-arm_cos_f32.c / arm_sin_f32.c / arm_sin_cos_f32.h
-  ODrive 风格 sin/cos 接口。
+VBUS_S_DIVIDER_RATIO = 19.0
+SHUNT_RESISTANCE     = 0.0005 ohm
+PHASE_CURRENT_GAIN   = 10.0
 ```
 
-## 控制模式
-
-```c
-MOTOR_AXIS_MODE_IDLE              = 0
-MOTOR_AXIS_MODE_OPEN_LOOP_VOLTAGE = 1
-MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_LOCKIN = 2
-MOTOR_AXIS_MODE_OPEN_LOOP_CURRENT_RUN    = 3
-```
-
-### 开环电压模式
+如果 ADC 原始值超出允许范围，会置位：
 
 ```text
-open <voltage_mod> <electrical_rad_s>
+ERROR_CURRENT_SENSE_SATURATION
 ```
 
-例子：
+## 电阻电感测量
+
+USB 发送 `C` 后进入：
 
 ```text
-open 0.02 5
+AXIS_STATE_MOTOR_CALIBRATION
+  -> run_calibration()
+     -> measure_phase_resistance()
+     -> measure_phase_inductance()
+     -> update_current_controller_gains()
 ```
 
-含义：
-
-- `voltage_mod`：电压调制幅值，不是真实伏特，当前限制在较小范围内
-- `electrical_rad_s`：电角速度，单位 rad/s
-
-### 开环电流模式
+测量输出示例：
 
 ```text
-cur <iq_amp> <electrical_rad_s>
+OK: motor calibration start
+motor R_mohm=120,L_uH=10
+P_milli=10,I_milli=80
+status=1,error=0.
 ```
 
-例子：
+说明：
+
+- `R_mohm`：相电阻，单位 mOhm
+- `L_uH`：相电感，单位 uH
+- `P_milli`：电流环 P 参数乘以 1000
+- `I_milli`：电流环 I 参数乘以 1000
+- `status=1` 表示测量成功
+- `error=0` 表示无错误
+
+这里避免使用 `%f/%e` 浮点 printf，防止嵌入式库未开启浮点格式化时输出乱码。
+
+## 开环控制
+
+USB 命令：
 
 ```text
-cur 0.02 5
+O
+O <voltage_V> <electrical_rad_s>
+S
 ```
 
-含义：
-
-- `iq_amp`：q 轴目标电流，单位 A
-- `electrical_rad_s`：开环电角速度，单位 rad/s
-
-注意：当前 `phase_current_gain` 仍是调试默认值，ADC count 到真实 A 的比例还需要标定。第一次测试从很小的 `iq_amp` 开始。
-
-### 停止
+示例：
 
 ```text
-stop
-idle
+O
+O 0.6 62.8
+O 0.6 -62.8
+S
 ```
+
+说明：
+
+- `voltage_V` 是输出电压目标，单位 V
+- `electrical_rad_s` 是电角速度，单位 rad/s
+- 速度为正时正转，速度为负时反转
+- `S` 停止输出并 disarm
+
+默认开环参数：
+
+```text
+target_voltage      = 0.6 V
+target_vel          = 62.8 electrical rad/s
+max_voltage_ramp    = 2.0 V/s
+max_phase_vel_ramp  = 1000 rad/s^2
+```
+
+如果电机是 7 极对，电角速度到机械转速的换算为：
+
+```text
+mechanical_rpm = electrical_rad_s / (2*pi*pole_pairs) * 60
+```
+
+例如：
+
+```text
+62.8 / (2*pi*7) * 60 = 85.7 rpm
+```
+
+纯开环启动时轻微回拉或抖一下是正常现象，因为启动时控制器假设 `phase = 0`，而真实转子可能停在任意角度。
 
 ## USB 命令
 
-```text
-open <voltage_mod> <electrical_rad_s>
-cur <iq_amp> <electrical_rad_s>
-cparam [phase_current_gain current_limit max_voltage_mod]
-cgain [p_gain i_gain]
-stop
-idle
-help
-```
-
-`cparam` 不带参数时打印当前电流采样比例、限流和最大电压调制量；带参数时更新：
+当前命令：
 
 ```text
-cparam 0.01 5 0.08
+H / h / ?        help
+C / c            measure motor R/L
+O / o            open loop start with default target
+O <volt> <vel>   open loop start with target voltage and electrical velocity
+S / s            stop
 ```
 
-`cgain` 不带参数时打印当前 PI 参数；带参数时更新：
+帮助输出：
 
 ```text
-cgain 0.002 1
+YDrive measure mode
+H: help
+C: measure motor R/L
+O [volt vel]: open loop
+S: stop
 ```
 
-## 监控输出
-
-监控任务每 1000 ms 打印一次，分三行：
+开环启动回显：
 
 ```text
-sys: nfault=1 mode=2 out=1 cal=1 loop=12345 miss=0 adc_hz=48000 cur_hz=8000
-ctrl: open=1 phase_mrad=120 vel_mrad_s=5000 v_milli=0 iq_sp_ma=20 iq_ramp_ma=18 id_ma=-5 iq_ma=18 vd_milli=1 vq_milli=3 ierr=0
-adc: dir=1 dc_cal=2048 vbus=807 raw=386/384 off=384/383 iabc=-2/1/1 pwm=1749/1750/1751
+OK: open loop voltage_mV=600 vel_mrad_s=62800
 ```
-
-`sys`：
-
-- `nfault`：DRV nFAULT 引脚，1 表示没有 fault
-- `mode`：MotorAxis 当前模式
-- `out`：EN_GATE/PWM 输出是否已启用
-- `cal`：ADC offset 是否校准完成
-- `loop`：motor axis 控制循环计数
-- `miss`：控制 deadline miss 次数
-- `adc_hz`：本打印周期内 ADC injected IRQ 次数，1s 打印时约 48000
-- `cur_hz`：真实电流采样次数，1s 打印时约 8000
-
-`ctrl`：
-
-- `open`：开环控制器是否 enable
-- `phase_mrad`：开环电角度，单位 mrad
-- `vel_mrad_s`：开环电角速度，单位 mrad/s
-- `v_milli`：开环电压调制量，乘以 1000 打印
-- `iq_sp_ma`：q 轴目标电流，单位 mA
-- `iq_ramp_ma`：经过软启动斜坡后真正送入 PI 的 q 轴电流目标，单位 mA
-- `id_ma` / `iq_ma`：测得 d/q 轴电流，单位 mA
-- `vd_milli` / `vq_milli`：电流 PI 输出的 d/q 轴电压调制量，乘以 1000 打印
-- `ierr`：电流环错误标志
-
-`adc`：
-
-- `dir`：TIM1 当前计数方向
-- `dc_cal`：DC_CAL offset 更新计数
-- `vbus`：母线电压 ADC raw
-- `raw`：phase B / phase C ADC raw
-- `off`：phase B / phase C offset
-- `iabc`：offset 后的 ia/ib/ic raw
-- `pwm`：三相 PWM CCR ticks
 
 ## 硬件配置
 
-- MCU：STM32F405RGTx
-- RTOS：FreeRTOS CMSIS-RTOS2
-- USB：USB CDC
-- PWM：TIM1
-- ADC：ADC1/ADC2/ADC3 injected
-- EN_GATE：PB12
-- nFAULT：PD2
+```text
+MCU      = STM32F405RGTx
+RTOS     = FreeRTOS CMSIS-RTOS2
+USB      = USB CDC
+PWM      = TIM1
+ADC      = ADC1/ADC2/ADC3 injected
+EN_GATE  = PB12
+nFAULT   = PD2
+```
 
 TIM1：
 
 ```text
 Counter Mode      = Center Aligned 3
-Period            = 3500
-RepetitionCounter = 2
+Period            = TIM_1_8_PERIOD_CLOCKS = 3500
+RepetitionCounter = TIM_1_8_RCR = 2
 PWM Mode          = PWM2
 TRGO              = Update Event
-DeadTime          = 20
+DeadTime          = TIM_1_8_DEADTIME_CLOCKS
 ```
 
-ADC：
+控制周期：
 
 ```text
-ADC1: VBUS
-ADC2: phase B current
-ADC3: phase C current
+TIM_1_8_CLOCK_HZ = 168000000
+half_period_tick = TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1)
+                 = 3500 * (2 + 1)
+                 = 10500
+
+current_meas_period = 2 * 10500 / 168000000
+                    = 0.000125 s
+
+current_meas_hz = 8000 Hz
 ```
+
+## 错误位
+
+错误位定义在 `MotorControl/motor.h`：
+
+```text
+ERROR_MODULATION_MAGNITUDE
+ERROR_CURRENT_SENSE_SATURATION
+ERROR_CURRENT_LIMIT_VIOLATION
+ERROR_PHASE_RESISTANCE_OUT_OF_RANGE
+ERROR_UNKNOWN_VBUS_VOLTAGE
+ERROR_NOT_HIGH_CURRENT_MOTOR
+ERROR_UNBALANCED_PHASES
+ERROR_PHASE_INDUCTANCE_OUT_OF_RANGE
+ERROR_BAD_TIMING
+ERROR_TIMER_UPDATE_MISSED
+ERROR_CONTROL_DEADLINE_MISSED
+```
+
+当前错误仍采用 bitmask，便于多个 fault 同时记录。
 
 ## 构建
 
-详细环境说明见：
+环境说明：
 
 [Docs/environment_and_build.md](Docs/environment_and_build.md)
 
@@ -309,32 +329,32 @@ Board/build/Debug/YDrive.hex
 
 ## 安全约定
 
-- 上电默认 `EN_GATE=0`
-- ADC offset 未校准完成时不允许打开输出
-- deadline miss 时 disarm
-- 测试从很小命令开始，例如：
+- 上电默认 PWM 不输出
+- `arm()` 直接置位 `TIM1->BDTR.MOE`
+- `disarm()` 直接清除 `TIM1->BDTR.MOE`
+- TIM update 方向异常会置位 `ERROR_TIMER_UPDATE_MISSED`
+- ControlLoop 未在预期半周期内完成会置位 `ERROR_CONTROL_DEADLINE_MISSED`
+- 调试开环时从低电压、低速度开始
+
+推荐测试顺序：
 
 ```text
-open 0.02 5
-cur 0.02 5
+H
+C
+O 0.4 20
+O 0.6 40
+O 0.6 62.8
+O 0.6 -62.8
+S
 ```
-
-如果 `cur` 启动瞬间仍有明显抖动，先降低第二个参数，例如 `cur 0.05 2`；开环电流模式下速度也会影响启动冲击。
-
-## 参考文档
-
-- [Docs/environment_and_build.md](Docs/environment_and_build.md)
-- [Docs/ODrive_motor0_timing_notes.md](Docs/ODrive_motor0_timing_notes.md)
-- [Docs/svpwm_understanding_notes.md](Docs/svpwm_understanding_notes.md)
-- [Docs/ydrive_cubemx_and_plan.md](Docs/ydrive_cubemx_and_plan.md)
 
 ## 下一步
 
 建议继续按这个顺序推进：
 
-1. 用 `cparam` 标定 ADC raw 到真实相电流 A 的比例。
-2. 用 `cgain` 根据电阻/电感设置更合理的 PI 参数。
-3. 增加电流环更严格的 fault 策略。
-4. 接入编码器角度，替换开环 phase。
-5. 做速度闭环。
-6. 做位置闭环。
+1. 接入编码器读取与角度换算。
+2. 做编码器 offset calibration。
+3. 用编码器角度替换开环 phase。
+4. 完成 Id/Iq 电流闭环。
+5. 完成速度闭环。
+6. 完成位置闭环。

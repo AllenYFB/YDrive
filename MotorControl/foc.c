@@ -1,79 +1,72 @@
+
+
+
 #include "foc.h"
 
-#include "arm_sin_cos_f32.h"
-#include "power_stage.h"
+#include "arm_cos_f32.h"
+#include "board.h"
+#include "motor.h"
+#include "open_loop_controller.h"
+#include "tim.h"
 
-static uint32_t foc_controller_enqueue_modulation(FocController *controller,
-                                                 float mod_alpha,
-                                                 float mod_beta);
 
-void foc_controller_init(FocController *controller)
+
+/*****************************************************************************/
+uint32_t  motor_error;
+float  Ialpha_beta[2];
+
+float  pi_gains_[2];
+/*****************************************************************************/
+bool enqueue_modulation_timings(float mod_alpha, float mod_beta)
 {
-    if (controller == 0) {
-        return;
-    }
-
-    controller->pwm_a = POWER_STAGE_PWM_CENTER_TICKS;
-    controller->pwm_b = POWER_STAGE_PWM_CENTER_TICKS;
-    controller->pwm_c = POWER_STAGE_PWM_CENTER_TICKS;
-    controller->mod_alpha = 0.0f;
-    controller->mod_beta = 0.0f;
-    controller->error = 0U;
+	float tA, tB, tC;
+	if (SVM(mod_alpha, mod_beta, &tA, &tB, &tC) != 0)
+	{
+		set_error(ERROR_MODULATION_MAGNITUDE);
+		return false;
+	}
+	TIM1->CCR1 = (uint16_t)(tA * (float)TIM_1_8_PERIOD_CLOCKS);
+	TIM1->CCR2 = (uint16_t)(tB * (float)TIM_1_8_PERIOD_CLOCKS);
+	TIM1->CCR3 = (uint16_t)(tC * (float)TIM_1_8_PERIOD_CLOCKS);
+	return true;
 }
-
-uint32_t foc_controller_apply_voltage(FocController *controller,
-                                      float v_d,
-                                      float v_q,
-                                      float pwm_phase)
+/*****************************************************************************/
+bool enqueue_voltage_timings(float v_alpha, float v_beta)
 {
-    if (controller == 0) {
-        return 0U;
-    }
-
-    float c = arm_cos_f32(pwm_phase);
-    float s = arm_sin_f32(pwm_phase);
-    float mod_alpha = c * v_d - s * v_q;
-    float mod_beta = c * v_q + s * v_d;
-
-    return foc_controller_enqueue_modulation(controller, mod_alpha, mod_beta);
+	float vfactor = 1.0f / ((2.0f / 3.0f) * vbus_voltage);
+	float mod_alpha = vfactor * v_alpha;
+	float mod_beta = vfactor * v_beta;
+	if (!enqueue_modulation_timings(mod_alpha, mod_beta))
+		return false;
+	return true;
 }
-
-void foc_controller_get_status(const FocController *controller, FocController *status)
+/****************************************************************************/
+// We should probably make FOC Current call FOC Voltage to avoid duplication.
+bool FOC_voltage(float v_d, float v_q, float pwm_phase)  //pwm_phase是park逆变换时的θ
 {
-    if ((controller == 0) || (status == 0)) {
-        return;
-    }
-
-    *status = *controller;
+	float c = our_arm_cos_f32(pwm_phase);
+	float s = our_arm_sin_f32(pwm_phase);
+	float v_alpha = c*v_d - s*v_q;
+	float v_beta = c*v_q + s*v_d;
+	return enqueue_voltage_timings(v_alpha, v_beta);
 }
-
-static uint32_t foc_controller_enqueue_modulation(FocController *controller,
-                                                 float mod_alpha,
-                                                 float mod_beta)
+/*****************************************************************************/
+void on_measurement(uint32_t input_timestamp, Iph_ABC_t *current)
 {
-    float t_a;
-    float t_b;
-    float t_c;
+	(void)input_timestamp;
 
-    if (svm(mod_alpha, mod_beta, &t_a, &t_b, &t_c) != 0) {
-        controller->error |= FOC_ERROR_MODULATION_MAGNITUDE;
-        power_stage_enable_output(0U);
-        power_stage_write_neutral();
-        return 0U;
-    }
-
-    PhasePwm pwm = {
-        .phase_a = (uint32_t)(t_a * (float)POWER_STAGE_PWM_PERIOD_TICKS),
-        .phase_b = (uint32_t)(t_b * (float)POWER_STAGE_PWM_PERIOD_TICKS),
-        .phase_c = (uint32_t)(t_c * (float)POWER_STAGE_PWM_PERIOD_TICKS),
-    };
-
-    controller->mod_alpha = mod_alpha;
-    controller->mod_beta = mod_beta;
-    controller->pwm_a = pwm.phase_a;
-    controller->pwm_b = pwm.phase_b;
-    controller->pwm_c = pwm.phase_c;
-
-    power_stage_write_pwm(&pwm);
-    return 1U;
+	// Clark transform
+	Ialpha_beta[0] = current->phA;
+	Ialpha_beta[1] = one_by_sqrt3 * (current->phB - current->phC);
 }
+/*****************************************************************************/
+void foc_pwm_update_cb(uint32_t output_timestamp)
+{
+	float dt = (float)(int32_t)(output_timestamp - openloop_controller_.timestamp_) / (float)TIM_1_8_CLOCK_HZ;
+	float pwm_phase = openloop_controller_.phase_ + openloop_controller_.phase_vel_ * dt;
+	FOC_voltage(openloop_controller_.Vdq_setpoint_.d, openloop_controller_.Vdq_setpoint_.q, pwm_phase);
+}
+/*****************************************************************************/
+
+
+

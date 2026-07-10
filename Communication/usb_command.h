@@ -3,23 +3,12 @@
 
 #include <stdint.h>
 
-typedef enum {
-    USB_COMMAND_OPEN,
-    USB_COMMAND_CURRENT,
-    USB_COMMAND_CURRENT_PARAM,
-    USB_COMMAND_CURRENT_GAIN,
-    USB_COMMAND_STOP,
-    USB_COMMAND_IDLE,
-    USB_COMMAND_HELP,
-    USB_COMMAND_UNKNOWN,
-} UsbCommandType;
-
-typedef struct {
-    UsbCommandType type;
-    char *args;
-} UsbCommandLine;
+extern uint8_t usb_recbuff[128];
+extern uint8_t usb_sndbuff[128];
+extern uint32_t usb_rcv_count;
 
 void usb_command_receive(const uint8_t *data, uint32_t length);
-UsbCommandLine usb_command_parse_line(char *line);
+void USBcommander_run(void);
+void usb_send(uint8_t *data, uint32_t len);
 
 #endif

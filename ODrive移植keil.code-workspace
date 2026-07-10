@@ -1,16 +1,16 @@
 {
 	"folders": [
 		{
-			"path": "../ODrive移植keil"
-		},
-		{
 			"path": "."
 		},
 		{
-			"path": "../ODrive3.6/ODrive_0.5.1/ODrive-fw-v0.5.1"
+			"path": "../ODrive3.6/ODrive_0.5.6/ODrive_v0.5.6"
 		},
 		{
-			"path": "../../../Downloads/OV-Watch-main/Software/OV_Watch"
+			"path": "../ODrive移植keil/6_测量电阻电感/6_measure"
+		},
+		{
+			"path": "../ODrive移植keil/5_开环速度控制/5_openloop"
 		}
 	],
 	"launch": {

@@ -22,12 +22,11 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "power_stage.h"
+#include "board.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN TD */
-typedef void (*ADC_handler_t)(ADC_HandleTypeDef *hadc, uint8_t injected);
 
 /* USER CODE END TD */
 
@@ -53,22 +52,6 @@ typedef void (*ADC_handler_t)(ADC_HandleTypeDef *hadc, uint8_t injected);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void ADC_IRQ_Dispatch(ADC_HandleTypeDef *hadc, ADC_handler_t callback)
-{
-  uint32_t jeoc = __HAL_ADC_GET_FLAG(hadc, ADC_FLAG_JEOC);
-  uint32_t jeoc_it_en = __HAL_ADC_GET_IT_SOURCE(hadc, ADC_IT_JEOC);
-  if ((jeoc != 0U) && (jeoc_it_en != 0U)) {
-    callback(hadc, 1U);
-    __HAL_ADC_CLEAR_FLAG(hadc, (ADC_FLAG_JSTRT | ADC_FLAG_JEOC));
-  }
-
-  uint32_t eoc = __HAL_ADC_GET_FLAG(hadc, ADC_FLAG_EOC);
-  uint32_t eoc_it_en = __HAL_ADC_GET_IT_SOURCE(hadc, ADC_IT_EOC);
-  if ((eoc != 0U) && (eoc_it_en != 0U)) {
-    callback(hadc, 0U);
-    __HAL_ADC_CLEAR_FLAG(hadc, (ADC_FLAG_STRT | ADC_FLAG_EOC));
-  }
-}
 
 /* USER CODE END 0 */
 
@@ -224,10 +207,6 @@ void DMA1_Stream5_IRQHandler(void)
 void ADC_IRQHandler(void)
 {
   /* USER CODE BEGIN ADC_IRQn 0 */
-  ADC_IRQ_Dispatch(&hadc1, power_stage_vbus_adc_callback);
-  ADC_IRQ_Dispatch(&hadc2, power_stage_current_adc_callback);
-  ADC_IRQ_Dispatch(&hadc3, power_stage_current_adc_callback);
-  return;
 
   /* USER CODE END ADC_IRQn 0 */
   HAL_ADC_IRQHandler(&hadc1);
@@ -295,11 +274,31 @@ void CAN1_SCE_IRQHandler(void)
 }
 
 /**
+  * @brief This function handles software-triggered motor control loop.
+  */
+void TIM1_BRK_TIM9_IRQHandler(void)
+{
+  /* USER CODE BEGIN TIM1_BRK_TIM9_IRQn 0 */
+
+  /* USER CODE END TIM1_BRK_TIM9_IRQn 0 */
+  /* USER CODE BEGIN TIM1_BRK_TIM9_IRQn 1 */
+
+  /* USER CODE END TIM1_BRK_TIM9_IRQn 1 */
+}
+
+/**
   * @brief This function handles TIM1 update interrupt and TIM10 global interrupt.
   */
 void TIM1_UP_TIM10_IRQHandler(void)
 {
   /* USER CODE BEGIN TIM1_UP_TIM10_IRQn 0 */
+  if (__HAL_TIM_GET_FLAG(&htim1, TIM_FLAG_UPDATE) != RESET) {
+    if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_UPDATE) != RESET) {
+      __HAL_TIM_CLEAR_IT(&htim1, TIM_IT_UPDATE);
+      motor_control_tim1_update();
+    }
+  }
+  return;
 
   /* USER CODE END TIM1_UP_TIM10_IRQn 0 */
   HAL_TIM_IRQHandler(&htim1);
@@ -407,5 +406,9 @@ void OTG_FS_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+void ControlLoop_IRQHandler(void)
+{
+  motor_control_run_control_loop();
+}
 
 /* USER CODE END 1 */
