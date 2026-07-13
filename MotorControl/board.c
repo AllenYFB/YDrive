@@ -31,6 +31,7 @@ static uint8_t adcs_ready(void)
 
 static void vbus_sense_adc_cb(uint32_t adc_value)
 {
+    /* Vbus=adc*3.3*19/4096 */
     float voltage_scale = 3.3f * VBUS_S_DIVIDER_RATIO / 4096.0f;
     vbus_voltage = (float)adc_value * voltage_scale;
 }
@@ -43,10 +44,19 @@ static float phase_current_from_adcval(uint32_t adc_value)
         return 0.0f;
     }
 
+    /* adc_bal=adc-2048 
+    因为电机电流是交流的，双向流动。
+    运放输出偏置在 1.65V（ADC 中点 2048），这样正负电流都能被采样。
+    减去 2048 后，adcval_bal 的符号就代表了电流方向。*/
     int32_t adcval_bal = (int32_t)adc_value - (1 << 11);
+
+    /* Vamp=3.3/4096*adc_bal */
     float amp_out_volt = (3.3f / (float)(1 << 12)) * (float)adcval_bal;
+
+    /* Vshunt=Vamp/Gain */
     float shunt_volt = amp_out_volt / PHASE_CURRENT_GAIN;
 
+    /* Iphase=Vshunt/Rshunt */
     return shunt_volt / SHUNT_RESISTANCE;
 }
 
@@ -59,6 +69,7 @@ static uint8_t fetch_and_reset_adcs(Iph_ABC_t *current)
     vbus_sense_adc_cb(ADC1->JDR1);
     current->phB = phase_current_from_adcval(ADC2->JDR1);
     current->phC = phase_current_from_adcval(ADC3->JDR1);
+    /* Ia=-Ib-Ic */
     current->phA = -current->phB - current->phC;
 
     ADC1->SR = ~(ADC_SR_JEOC | ADC_SR_JSTRT | ADC_SR_OVR);

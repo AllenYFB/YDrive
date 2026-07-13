@@ -5,12 +5,6 @@
 		},
 		{
 			"path": "../ODrive3.6/ODrive_0.5.6/ODrive_v0.5.6"
-		},
-		{
-			"path": "../ODrive移植keil/6_测量电阻电感/6_measure"
-		},
-		{
-			"path": "../ODrive移植keil/5_开环速度控制/5_openloop"
 		}
 	],
 	"launch": {

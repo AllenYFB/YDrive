@@ -1,20 +1,13 @@
-
 #include "motor.h"
 
 #include "board.h"
+#include "cmsis_os.h"
 #include "foc.h"
 #include "tim.h"
-#include "cmsis_os.h"
 
 #include <math.h>
 
 /****************************************************************************/
-MOTOR_CONFIG  motor_config;
-static Iph_ABC_t  DC_calib_;
-static float dc_calib_running_since_ = 0.0f;
-
-static float max_dc_calib_ = 0.0f; // [A] set in setup()
-
 typedef enum
 {
 	MOTOR_CONTROL_MODE_NORMAL = 0,
@@ -22,194 +15,205 @@ typedef enum
 	MOTOR_CONTROL_MODE_INDUCTANCE,
 } MOTOR_CONTROL_MODE;
 
-static MOTOR_CONTROL_MODE motor_control_mode_ = MOTOR_CONTROL_MODE_NORMAL;
+typedef struct
+{
+	float target_current;
+	float max_voltage;
+	float test_voltage;
+	float beta_current;
+	float mod_alpha;
+} RESISTANCE_MEASUREMENT;
+
+typedef struct
+{
+	float test_voltage;
+	float last_Ialpha;
+	float deltaI;
+	uint32_t start_timestamp;
+	uint32_t last_input_timestamp;
+	bool attached;
+} INDUCTANCE_MEASUREMENT;
 /****************************************************************************/
-//参数初始化，官方代码中，直接在定义的时候赋值
+static void resistance_reset(float target_current, float max_voltage);
+static void resistance_on_measurement(void);
+static void resistance_get_alpha_beta_output(void);
+static void inductance_reset(float test_voltage);
+static void inductance_on_measurement(uint32_t input_timestamp);
+static void inductance_get_alpha_beta_output(void);
+static void update_current_controller_gains(void);
+/****************************************************************************/
+MOTOR_CONFIG motor_config;
+bool is_armed_ = false;
+
+static Iph_ABC_t DC_calib_;
+static float dc_calib_running_since_ = 0.0f;
+static float max_dc_calib_ = 0.0f;
+
+static MOTOR_CONTROL_MODE motor_control_mode_ = MOTOR_CONTROL_MODE_NORMAL;
+static RESISTANCE_MEASUREMENT resistance_meas_;
+static INDUCTANCE_MEASUREMENT inductance_meas_;
+/****************************************************************************/
 void motor_para_init(void)
 {
-	motor_config.calibration_current = MOTOR_CALIBRATION_CURRENT_DEFAULT;    // [A]
-	motor_config.resistance_calib_max_voltage = MOTOR_RESISTANCE_CALIB_MAX_VOLTAGE_DEFAULT; // [V] - You may need to increase this if this voltage isn't sufficient to drive calibration_current through the motor.
-	motor_config.phase_inductance = 0.0f;        // to be set by measure_phase_inductance
-	motor_config.phase_resistance = 0.0f;        // to be set by measure_phase_resistance
+	motor_config.calibration_current = MOTOR_CALIBRATION_CURRENT_DEFAULT;
+	motor_config.resistance_calib_max_voltage = MOTOR_RESISTANCE_CALIB_MAX_VOLTAGE_DEFAULT;
+	motor_config.phase_inductance = 0.0f;
+	motor_config.phase_resistance = 0.0f;
 	motor_config.pole_pairs = MOTOR_POLE_PAIRS;
 	motor_config.motor_type = MOTOR_TYPE;
-	// Read out max_allowed_current to see max supported value for current_lim.
-	// float current_lim = 70.0f; //[A]
-//	motor_config.torque_lim = std::numeric_limits<float>::infinity();           //[Nm]. 
-	// Value used to compute shunt amplifier gains
-	//float requested_current_range = 60.0f; //  [A]1mΩ采样电阻对应60A，0.5mΩ采样电阻对应120A
-	motor_config.current_control_bandwidth = 1000.0f;  // [rad/s]
-	
-//	float acim_gain_min_flux = 10; // [A]
-//	float acim_autoflux_min_Id = 10; // [A]
-//	bool acim_autoflux_enable = false;
-//	float acim_autoflux_attack_gain = 10.0f;
-//	float acim_autoflux_decay_gain = 1.0f;
-	
-	
-	
+	motor_config.current_control_bandwidth = 1000.0f;
 	motor_config.dc_calib_tau = 0.2f;
 }
 /****************************************************************************/
 void motor_setup(void)
 {
-	// Solve for exact gain, then snap down to have equal or larger range as requested
-	// or largest possible range otherwise
 	const float kMargin = 0.90f;
-	const float max_output_swing = 1.35f; // [V] out of amplifier
-	
-	float max_unity_gain_current = kMargin * max_output_swing * (1/SHUNT_RESISTANCE); // [A]  1215
-	//float requested_gain = max_unity_gain_current / config_.requested_current_range; // [V/V]
-	const float actual_gain=20.0f;  //固定放大倍数20倍
-	
-	// Values for current controller
-	float phase_current_rev_gain_ = 1.0f / actual_gain;  //0.05
-	// Clip all current control to actual usable range
-	float max_allowed_current = max_unity_gain_current * phase_current_rev_gain_;  // =1215*0.05=60.75 A
+	const float max_output_swing = 1.35f;
+	const float actual_gain = PHASE_CURRENT_GAIN;
 
-	max_dc_calib_ = 0.1f * max_allowed_current;  //约等于 6A
+	/* Imax=0.9*1.35/Rshunt/Gain */
+	float max_unity_gain_current = kMargin * max_output_swing / SHUNT_RESISTANCE;
+	float max_allowed_current = max_unity_gain_current / actual_gain;
+
+	max_dc_calib_ = 0.1f * max_allowed_current;
 }
 /****************************************************************************/
-
-bool  is_armed_ = false;
-
-float  cali_target_current_;
-float  cali_max_voltage_;
-float  test_voltage_;
-float  I_beta_; // [A] low pass filtered Ibeta response
-float  test_mod_;
-
-void arm(void);
-void disarm(void);
-/****************************************************************************/
-void Resistance_reset(void)
+static void resistance_reset(float target_current, float max_voltage)
 {
-	test_voltage_ = 0;
-	I_beta_ = 0;
+	resistance_meas_.target_current = target_current;
+	resistance_meas_.max_voltage = max_voltage;
+	resistance_meas_.test_voltage = 0.0f;
+	resistance_meas_.beta_current = 0.0f;
+	resistance_meas_.mod_alpha = 0.0f;
 }
-/*************************************/
-// 电阻测量的电流输入侧，在 current_meas_cb() 后执行
-void Resistance_on_measurement(void)
+/****************************************************************************/
+static void resistance_on_measurement(void)
 {
-	const float kI = 1.0f; // [(V/s)/A]
+	const float kI = 1.0f;
 	const float kIBetaFilt = 80.0f;
-	
-	float actual_current = Ialpha_beta[0];    //Ialpha_beta 是foc.c中clark变换后的值
-	test_voltage_ += (kI * current_meas_period) * (cali_target_current_ - actual_current);  //消除误差，保持测量电压的稳定
-	I_beta_ += (kIBetaFilt * current_meas_period) * (Ialpha_beta[1] - I_beta_);    //消除误差，获取稳定的测量电流
-	if(fabsf(test_voltage_) > cali_max_voltage_)
+	float actual_current = Ialpha_beta[0];
+
+	/* e=Iref-Ialpha */
+	/* Vtest=Vtest+kI*Ts*e */
+	resistance_meas_.test_voltage += (kI * current_meas_period) *
+	                                 (resistance_meas_.target_current - actual_current);
+
+	/* Ibeta_f=Ibeta_f+k*Ts*(Ibeta-Ibeta_f) */
+	resistance_meas_.beta_current += (kIBetaFilt * current_meas_period) *
+	                                 (Ialpha_beta[1] - resistance_meas_.beta_current);
+
+	if (fabsf(resistance_meas_.test_voltage) > resistance_meas_.max_voltage)
 	{
 		disarm();
 		set_error(ERROR_PHASE_RESISTANCE_OUT_OF_RANGE);
 	}
-	else if(vbus_voltage <= 6)   //限制电源电压不能低于6V
+	else if (vbus_voltage <= 6.0f)
 	{
 		disarm();
 		set_error(ERROR_UNKNOWN_VBUS_VOLTAGE);
 	}
 	else
 	{
+		/* mod=Vtest/((2/3)*Vbus) */
 		float vfactor = 1.0f / ((2.0f / 3.0f) * vbus_voltage);
-		test_mod_ = test_voltage_ * vfactor;
+		resistance_meas_.mod_alpha = resistance_meas_.test_voltage * vfactor;
 	}
 }
-/*************************************/
-//代码被foc.c文件中的pwm_update_cb()函数调用
-void Resistance_get_alpha_beta_output(void)
+/****************************************************************************/
+static void resistance_get_alpha_beta_output(void)
 {
-	float mod_alpha = test_mod_;
-	float mod_beta = 0;
-	
-	enqueue_modulation_timings(mod_alpha, mod_beta);
+	enqueue_modulation_timings(resistance_meas_.mod_alpha, 0.0f);
 }
 /****************************************************************************/
-uint32_t  start_timestamp_;
-uint32_t  last_input_timestamp_;
-float last_Ialpha_;
-float deltaI_;
-bool  attached_ = false;
-/****************************************************************************/
-void Inductance_reset(void)
+static void inductance_reset(float test_voltage)
 {
-	attached_ = 0;
-	last_Ialpha_ = 0;
-	deltaI_ = 0;
+	inductance_meas_.test_voltage = test_voltage;
+	inductance_meas_.last_Ialpha = 0.0f;
+	inductance_meas_.deltaI = 0.0f;
+	inductance_meas_.start_timestamp = 0U;
+	inductance_meas_.last_input_timestamp = 0U;
+	inductance_meas_.attached = false;
 }
-/*************************************/
-// 电感测量的电流输入侧，在 current_meas_cb() 后执行
-void Inductance_on_measurement(uint32_t input_timestamp)
+/****************************************************************************/
+static void inductance_on_measurement(uint32_t input_timestamp)
 {
-	if(attached_)
+	if (inductance_meas_.attached)
 	{
-		float sign = test_voltage_ >= 0.0f ? 1.0f : -1.0f;
-		deltaI_ += -sign * (Ialpha_beta[0] - last_Ialpha_);
+		float sign = (inductance_meas_.test_voltage >= 0.0f) ? 1.0f : -1.0f;
+
+		/* dI=sum(-sign*(Ialpha[n]-Ialpha[n-1])) */
+		inductance_meas_.deltaI += -sign * (Ialpha_beta[0] - inductance_meas_.last_Ialpha);
 	}
 	else
 	{
-		start_timestamp_ = input_timestamp;   //第一次进入这个函数时的时间
-		attached_ = 1;
+		inductance_meas_.start_timestamp = input_timestamp;
+		inductance_meas_.attached = true;
 	}
-	
-	last_Ialpha_ = Ialpha_beta[0];
-	last_input_timestamp_ = input_timestamp;  //每进入一次记录一次，最后一次记录的就是最后一次的时间
-}
-/*************************************/
-//代码被foc.c文件中的pwm_update_cb()函数调用
-void Inductance_get_alpha_beta_output(void)
-{
-	test_voltage_ *= -1.0f;
-	float vfactor = 1.0f / ((2.0f / 3.0f) * vbus_voltage);
-	float mod_alpha = test_voltage_ * vfactor;
-	float mod_beta = 0.0f;
-	
-	enqueue_modulation_timings(mod_alpha, mod_beta);
+
+	inductance_meas_.last_Ialpha = Ialpha_beta[0];
+	inductance_meas_.last_input_timestamp = input_timestamp;
 }
 /****************************************************************************/
-void update_current_controller_gains(void)
+static void inductance_get_alpha_beta_output(void)
 {
-	// Calculate current control gains
-	float p_gain = motor_config.current_control_bandwidth * motor_config.phase_inductance;
-	float plant_pole = motor_config.phase_resistance / motor_config.phase_inductance;
-	
-	pi_gains_[0] = p_gain;
-	pi_gains_[1] = plant_pole * p_gain;
+	/* Vtest=-Vtest */
+	inductance_meas_.test_voltage *= -1.0f;
+
+	/* mod=Vtest/((2/3)*Vbus) */
+	float vfactor = 1.0f / ((2.0f / 3.0f) * vbus_voltage);
+	float mod_alpha = inductance_meas_.test_voltage * vfactor;
+
+	enqueue_modulation_timings(mod_alpha, 0.0f);
+}
+/****************************************************************************/
+static void update_current_controller_gains(void)
+{
+	/* Kp=wc*L */
+	/* Ki=(R/L)*Kp=wc*R */
+	pi_gains_[0] = motor_config.current_control_bandwidth * motor_config.phase_inductance;
+	pi_gains_[1] = motor_config.current_control_bandwidth * motor_config.phase_resistance;
 }
 /****************************************************************************/
 bool measure_phase_resistance(float test_current, float max_voltage)
 {
 	uint32_t i;
-	
-	cali_target_current_ = test_current;
-	cali_max_voltage_ = max_voltage;
-	Resistance_reset();
+
+	resistance_reset(test_current, max_voltage);
 	motor_control_mode_ = MOTOR_CONTROL_MODE_RESISTANCE;
-	
+
 	arm();
-	
-	for(i = 0; i < 3000; ++i)   //看起来这3秒钟像是什么也没干，实际在TIM1更新中断中运行
+
+	for (i = 0; i < 3000U; ++i)
 	{
-		//if (!((axis_->requested_state_ == Axis::AXIS_STATE_UNDEFINED) && axis_->motor_.is_armed_))
-		if(!is_armed_)break;
+		if (!is_armed_)
+		{
+			break;
+		}
 		osDelay(1);
 	}
-	
+
 	bool success = is_armed_;
 	disarm();
-	
-	if(success)motor_config.phase_resistance = test_voltage_ / test_current;
-	
-	if(motor_config.phase_resistance > 2)    //MOTOR_TYPE_HIGH_CURRENT的相电阻要小于2Ω，否则就是gimbal
+
+	if (success)
+	{
+		/* R=V/I */
+		motor_config.phase_resistance =
+			resistance_meas_.test_voltage / resistance_meas_.target_current;
+	}
+
+	if (motor_config.phase_resistance > 2.0f)
 	{
 		set_error(ERROR_NOT_HIGH_CURRENT_MOTOR);
-		success = 0;
+		success = false;
 	}
-	
-	if((fabsf(I_beta_) / test_current) > 0.2f)   //如果实际测量电流与设置电流误差比较大
+
+	if ((fabsf(resistance_meas_.beta_current) / test_current) > 0.2f)
 	{
 		set_error(ERROR_UNBALANCED_PHASES);
-		success = 0;
+		success = false;
 	}
-	
+
 	motor_control_mode_ = MOTOR_CONTROL_MODE_NORMAL;
 	return success;
 }
@@ -217,114 +221,145 @@ bool measure_phase_resistance(float test_current, float max_voltage)
 bool measure_phase_inductance(float test_voltage)
 {
 	uint32_t i;
-	
-	test_voltage_ = test_voltage;
-	Inductance_reset();
+
+	inductance_reset(test_voltage);
 	motor_control_mode_ = MOTOR_CONTROL_MODE_INDUCTANCE;
-	
+
 	arm();
-	
-	for(i = 0; i < 1250; ++i)   //1.25秒，有整有零，为什么是这个时间？
+
+	for (i = 0; i < 1250U; ++i)
 	{
-		//if (!((axis_->requested_state_ == Axis::AXIS_STATE_UNDEFINED) && axis_->motor_.is_armed_))
-		if(!is_armed_)break;
+		if (!is_armed_)
+		{
+			break;
+		}
 		osDelay(1);
 	}
-	
+
 	bool success = is_armed_;
 	disarm();
-	
-	if(success)
+
+	if (success)
 	{
-		float dt = (float)(last_input_timestamp_ - start_timestamp_) / (float)TIM_1_8_CLOCK_HZ; // at 216MHz this overflows after 19 seconds
-		motor_config.phase_inductance = fabsf(test_voltage_) / (deltaI_ / dt);
+		/* dt=(t1-t0)/Ftim */
+		float dt = (float)(inductance_meas_.last_input_timestamp -
+		                   inductance_meas_.start_timestamp) /
+		           (float)TIM_1_8_CLOCK_HZ;
+
+		/* L=abs(V)/(dI/dt) */
+		motor_config.phase_inductance =
+			fabsf(inductance_meas_.test_voltage) / (inductance_meas_.deltaI / dt);
 	}
-	
-	// TODO arbitrary values set for now
-	if (!(motor_config.phase_inductance >= 2e-6f && motor_config.phase_inductance <= 4000e-6f))
+
+	if (!(motor_config.phase_inductance >= 2e-6f &&
+	      motor_config.phase_inductance <= 4000e-6f))
 	{
 		set_error(ERROR_PHASE_INDUCTANCE_OUT_OF_RANGE);
-		success = 0;
+		success = false;
 	}
-	
+
 	motor_control_mode_ = MOTOR_CONTROL_MODE_NORMAL;
 	return success;
 }
 /****************************************************************************/
 bool run_calibration(void)
 {
-	float R_calib_max_voltage = motor_config.resistance_calib_max_voltage;
-	
-	if(motor_config.motor_type == MOTOR_TYPE_HIGH_CURRENT)
+	float resistance_calib_max_voltage = motor_config.resistance_calib_max_voltage;
+
+	if (motor_config.motor_type == MOTOR_TYPE_HIGH_CURRENT)
 	{
-		if(!measure_phase_resistance(motor_config.calibration_current, R_calib_max_voltage))return 0;
-		if(!measure_phase_inductance(R_calib_max_voltage))return 0;
+		if (!measure_phase_resistance(motor_config.calibration_current,
+		                              resistance_calib_max_voltage))
+		{
+			return false;
+		}
+
+		if (!measure_phase_inductance(resistance_calib_max_voltage))
+		{
+			return false;
+		}
 	}
-	else if(motor_config.motor_type == MOTOR_TYPE_GIMBAL)
+	else if (motor_config.motor_type == MOTOR_TYPE_GIMBAL)
 	{
-		// no calibration needed
 	}
 	else
 	{
-		return 0;
+		return false;
 	}
-	
+
 	update_current_controller_gains();
-	
-	return 1;
+
+	return true;
 }
 /****************************************************************************/
 void arm(void)
 {
-	is_armed_ = 1;
+	is_armed_ = true;
 	TIM1->BDTR |= TIM_BDTR_MOE;
 }
-/*************************************/
+/****************************************************************************/
 void disarm(void)
 {
-	is_armed_ = 0;
+	is_armed_ = false;
 	TIM1->BDTR &= ~TIM_BDTR_MOE;
 }
-/****************************************************************************/
 /****************************************************************************/
 void current_meas_cb(uint32_t timestamp, Iph_ABC_t *current)
 {
 	Iph_ABC_t current_meas;
-	bool dc_calib_valid = (dc_calib_running_since_ >= motor_config.dc_calib_tau * 7.5f)    //1.5秒，需12000次
-												&& (fabsf(DC_calib_.phA) < max_dc_calib_)
-												&& (fabsf(DC_calib_.phB) < max_dc_calib_)
-												&& (fabsf(DC_calib_.phC) < max_dc_calib_);
-	if(dc_calib_valid)
+
+	/* tvalid=7.5*tau 这里用 7.5 * tau 作为校准结果有效的等待时间——对于一阶低通滤波器，
+	经过约 7.5 个时间常数 后，滤波器输出基本达到稳态（约 99.95%），
+	此时 DC 偏置校准值被认为是可靠的。*/
+	bool dc_calib_valid = (dc_calib_running_since_ >= motor_config.dc_calib_tau * 7.5f) &&
+	                      (fabsf(DC_calib_.phA) < max_dc_calib_) &&
+	                      (fabsf(DC_calib_.phB) < max_dc_calib_) &&
+	                      (fabsf(DC_calib_.phC) < max_dc_calib_);
+
+	if (dc_calib_valid)
 	{
+		/* I=Iraw-Ioffset */
 		current_meas.phA = current->phA - DC_calib_.phA;
 		current_meas.phB = current->phB - DC_calib_.phB;
 		current_meas.phC = current->phC - DC_calib_.phC;
 	}
 	else
 	{
-		current_meas.phA = 0;
-		current_meas.phB = 0;
-		current_meas.phC = 0;
+		current_meas.phA = 0.0f;
+		current_meas.phB = 0.0f;
+		current_meas.phC = 0.0f;
 	}
-	
+
 	on_measurement(timestamp, &current_meas);
 
-	if(motor_control_mode_ == MOTOR_CONTROL_MODE_RESISTANCE)
+	if (motor_control_mode_ == MOTOR_CONTROL_MODE_RESISTANCE)
 	{
-		Resistance_on_measurement();
+		resistance_on_measurement();
 	}
-	else if(motor_control_mode_ == MOTOR_CONTROL_MODE_INDUCTANCE)
+	else if (motor_control_mode_ == MOTOR_CONTROL_MODE_INDUCTANCE)
 	{
-		Inductance_on_measurement(timestamp);
+		inductance_on_measurement(timestamp);
 	}
 }
 /****************************************************************************/
 void dc_calib_cb(uint32_t timestamp, Iph_ABC_t *current)
 {
 	(void)timestamp;
-	const float dc_calib_period = (float)(2U * TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1U)) / (float)TIM_1_8_CLOCK_HZ;  /* 2*3500*(2+1)/168000000=0.000125 */
-	const float calib_filter_k = clampf(dc_calib_period / motor_config.dc_calib_tau, 0.0f, 1.0f);    //0.000625
-	
+
+	/* Ts=2*3500*(2+1)/168000000=0.000125 */
+	const float dc_calib_period = (float)(2U * TIM_1_8_PERIOD_CLOCKS *
+	                                      (TIM_1_8_RCR + 1U)) /
+	                              (float)TIM_1_8_CLOCK_HZ;
+
+	/* k=Ts/tau */
+	const float calib_filter_k =
+		clampf(dc_calib_period / motor_config.dc_calib_tau, 0.0f, 1.0f);
+
+	/* y=y+k*(x-y) *********=====************y_new = (1-k)*y_old + k*x
+	这里 tau 是 一阶低通滤波器（指数移动平均）的时间常数 τ。
+	滤波系数 k = Ts / tau，其中 Ts 是采样周期。
+	滤波器方程为经典的 y_new = (1-k)·y_old + k·x，
+	用于平滑地估算三相电流的直流偏置（DC offset）*/
 	DC_calib_.phA += (current->phA - DC_calib_.phA) * calib_filter_k;
 	DC_calib_.phB += (current->phB - DC_calib_.phB) * calib_filter_k;
 	DC_calib_.phC += (current->phC - DC_calib_.phC) * calib_filter_k;
@@ -333,13 +368,13 @@ void dc_calib_cb(uint32_t timestamp, Iph_ABC_t *current)
 /****************************************************************************/
 void pwm_update_cb(uint32_t output_timestamp)
 {
-	if(motor_control_mode_ == MOTOR_CONTROL_MODE_RESISTANCE)
+	if (motor_control_mode_ == MOTOR_CONTROL_MODE_RESISTANCE)
 	{
-		Resistance_get_alpha_beta_output();
+		resistance_get_alpha_beta_output();
 	}
-	else if(motor_control_mode_ == MOTOR_CONTROL_MODE_INDUCTANCE)
+	else if (motor_control_mode_ == MOTOR_CONTROL_MODE_INDUCTANCE)
 	{
-		Inductance_get_alpha_beta_output();
+		inductance_get_alpha_beta_output();
 	}
 	else
 	{
