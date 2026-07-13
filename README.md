@@ -36,7 +36,7 @@ ControlLoop_IRQHandler
      -> 扣除 DC_calib
      -> Clarke transform
      -> 测量模式下处理 R/L 输入侧
-  -> axis_control_loop_cb()
+  -> control_loop_cb()
      -> open_loop_controller_update()
   -> 等待下一次 injected ADC 完成
   -> fetch_and_reset_adcs()

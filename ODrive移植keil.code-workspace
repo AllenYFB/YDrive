@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../ODrive3.6/ODrive_0.5.6/ODrive_v0.5.6"
+		},
+		{
+			"path": "../ODrive移植keil/7_插值算法和偏置校准/7_1encoder"
 		}
 	],
 	"launch": {

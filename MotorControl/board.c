@@ -155,7 +155,7 @@ void motor_control_run_control_loop(void)
     }
 
     current_meas_cb(timestamp, &current0);
-    axis_control_loop_cb(timestamp);
+    control_loop_cb(timestamp);
 
     if ((wait_for_next_injected_adc() == 0U) ||
         (fetch_and_reset_adcs(&current0) == 0U)) {

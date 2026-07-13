@@ -97,7 +97,7 @@ void run_state_machine_loop(void)
 	previous_state = current_state_;
 }
 /*****************************************************************************/
-void axis_control_loop_cb(uint32_t timestamp)
+void control_loop_cb(uint32_t timestamp)
 {
 	open_loop_controller_update(timestamp);
 }
