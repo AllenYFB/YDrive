@@ -23,6 +23,7 @@ typedef enum
 extern  AXIS_State_Type  current_state_;
 /****************************************************************************/
 void run_state_machine_loop(void);
+void sampling_cb(void);
 void control_loop_cb(uint32_t timestamp);
 /****************************************************************************/
 

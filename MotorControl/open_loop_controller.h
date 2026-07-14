@@ -8,15 +8,18 @@
 /****************************************************************************/
 typedef struct 
 {
+	float max_current_ramp_; // [A/s]
 	float max_voltage_ramp_; // [V/s]
 	float max_phase_vel_ramp_; // [rad/s^2]
 
 	// Inputs
+	float target_current_;
 	float target_vel_;
 	float target_voltage_;
 
 	// State/Outputs
 	uint32_t timestamp_;
+	float2D Idq_setpoint_;
 	float2D Vdq_setpoint_;
 	float phase_;
 	float phase_vel_;

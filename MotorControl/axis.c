@@ -1,5 +1,6 @@
 #include "axis.h"
 
+#include "encode.h"
 #include "foc.h"
 #include "motor.h"
 #include "open_loop_controller.h"
@@ -70,6 +71,18 @@ void run_state_machine_loop(void)
 		} break;
 
 		case AXIS_STATE_ENCODER_OFFSET_CALIBRATION: {
+			status = encoder_run_offset_calibration();
+			axis_send_calib_line("enc init=%ld,final=%ld\r\n",
+			                     (long)encoder_state.calib_init_count,
+			                     (long)encoder_state.calib_final_count);
+			axis_send_calib_line("enc resp=%ld,exp=%ld\r\n",
+			                     (long)float_to_i32_round(encoder_state.calib_scan_response),
+			                     (long)float_to_i32_round(encoder_state.calib_scan_expected));
+			axis_send_calib_line("enc err_pm=%ld,dir=%ld\r\n",
+			                     (long)float_to_i32_round(encoder_state.calib_scan_error * 1000.0f),
+			                     (long)encoder_config.direction);
+			axis_send_status_line(status);
+			current_state_ = AXIS_STATE_IDLE;
 		} break;
 
 		case AXIS_STATE_LOCKIN_SPIN: {
@@ -97,8 +110,14 @@ void run_state_machine_loop(void)
 	previous_state = current_state_;
 }
 /*****************************************************************************/
+void sampling_cb(void)
+{
+	encoder_sample_now();
+}
+/*****************************************************************************/
 void control_loop_cb(uint32_t timestamp)
 {
+	(void)encoder_update();
 	open_loop_controller_update(timestamp);
 }
 /*****************************************************************************/

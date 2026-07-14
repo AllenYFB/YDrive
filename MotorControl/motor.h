@@ -27,6 +27,10 @@
 #define ERROR_BAD_TIMING (1U << 8)
 #define ERROR_TIMER_UPDATE_MISSED (1U << 9)
 #define ERROR_CONTROL_DEADLINE_MISSED (1U << 10)
+#define ERROR_ENCODER_UNSTABLE_GAIN (1U << 11)
+#define ERROR_UNSUPPORTED_ENCODER_MODE (1U << 12)
+#define ERROR_ENCODER_FAILED (1U << 13)
+#define ERROR_ENCODER_NO_RESPONSE (1U << 14)
 /****************************************************************************/
 typedef struct
 {
@@ -41,6 +45,14 @@ typedef struct
 } MOTOR_CONFIG;
 
 extern MOTOR_CONFIG motor_config;
+extern uint32_t motor_error;
+extern float pi_gains_[2];
+extern bool is_armed_;
+/****************************************************************************/
+static inline void set_error(uint32_t error)
+{
+	motor_error |= error;
+}
 /****************************************************************************/
 void motor_para_init(void);
 void motor_setup(void);

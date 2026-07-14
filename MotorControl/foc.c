@@ -12,10 +12,7 @@
 
 
 /*****************************************************************************/
-uint32_t  motor_error;
 float  Ialpha_beta[2];
-
-float  pi_gains_[2];
 /*****************************************************************************/
 bool enqueue_modulation_timings(float mod_alpha, float mod_beta)
 {

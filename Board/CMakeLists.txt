@@ -48,6 +48,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/arm_cos_f32.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/axis.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/board.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/encode.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/foc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/motor.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/open_loop_controller.c

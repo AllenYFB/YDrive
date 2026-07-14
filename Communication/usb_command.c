@@ -1,7 +1,11 @@
 #include "usb_command.h"
 
 #include "axis.h"
+#include "encode.h"
+#include "foc.h"
+#include "motor.h"
 #include "open_loop_controller.h"
+#include "tim.h"
 #include "usbd_cdc_if.h"
 
 #include <stdio.h>
@@ -59,10 +63,13 @@ void USBcommander_run(void)
     case 'h':
     case '?':
         len = snprintf((char *)usb_sndbuff, sizeof(usb_sndbuff),
-                       "YDrive measure mode\r\n"
+                       "YDrive\r\n"
                        "H: help\r\n"
-                       "C: measure motor R/L\r\n"
-                       "O [volt vel]: open loop\r\n"
+                       "C: motor R/L\r\n"
+                       "E: encoder\r\n"
+                       "A: enc calib\r\n"
+                       "X: clear error\r\n"
+                       "O [V rad/s]\r\n"
                        "S: stop\r\n");
         if ((len > 0) && ((uint32_t)len < sizeof(usb_sndbuff))) {
             usb_send(usb_sndbuff, (uint32_t)len);
@@ -76,6 +83,34 @@ void USBcommander_run(void)
         if ((len > 0) && ((uint32_t)len < sizeof(usb_sndbuff))) {
             usb_send(usb_sndbuff, (uint32_t)len);
         }
+        break;
+
+    case 'E':
+    case 'e':
+        len = snprintf((char *)usb_sndbuff, sizeof(usb_sndbuff),
+                       "enc cnt=%ld shadow=%ld cpr=%ld pos_mturn=%ld vel_mturn_s=%ld ready=%d error=%lX\r\n",
+                       (long)(int16_t)TIM3->CNT,
+                       (long)encoder_state.shadow_count,
+                       (long)encoder_config.cpr,
+                       (long)float_to_i32_round(encoder_state.pos_estimate * 1000.0f),
+                       (long)float_to_i32_round(encoder_state.vel_estimate * 1000.0f),
+                       (int)encoder_state.is_ready,
+                       (unsigned long)motor_error);
+        usb_send_snprintf(len);
+        break;
+
+    case 'A':
+    case 'a':
+        current_state_ = AXIS_STATE_ENCODER_OFFSET_CALIBRATION;
+        len = snprintf((char *)usb_sndbuff, sizeof(usb_sndbuff), "OK: encoder offset calibration start\r\n");
+        usb_send_snprintf(len);
+        break;
+
+    case 'X':
+    case 'x':
+        motor_error = ERROR_NONE;
+        len = snprintf((char *)usb_sndbuff, sizeof(usb_sndbuff), "OK: error cleared\r\n");
+        usb_send_snprintf(len);
         break;
 
     case 'O':

@@ -1,12 +1,12 @@
-
 #include "board.h"
 
 #include "adc.h"
+#include "axis.h"
+#include "encode.h"
 #include "foc.h"
 #include "gpio.h"
 #include "motor.h"
 #include "tim.h"
-#include "axis.h"
 
 #include <stdint.h>
 
@@ -31,7 +31,7 @@ static uint8_t adcs_ready(void)
 
 static void vbus_sense_adc_cb(uint32_t adc_value)
 {
-    /* Vbus=adc*3.3*19/4096 */
+    /* Vbus=adc*3.3*18.73/4096 */
     float voltage_scale = 3.3f * VBUS_S_DIVIDER_RATIO / 4096.0f;
     vbus_voltage = (float)adc_value * voltage_scale;
 }
@@ -108,6 +108,7 @@ void motor_control_start(void)
     (void)HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_1);
     (void)HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_2);
     (void)HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_3);
+    encoder_init();
     (void)HAL_TIM_Base_Start_IT(&htim1);
 
     HAL_NVIC_SetPriority(ControlLoop_IRQn, 5, 0);
@@ -133,6 +134,7 @@ void motor_control_tim1_update(void)
     timestamp_ += TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1U); /* 3500*(2+1)=10500 */
 
     if (counting_down == 0U) {
+        sampling_cb();
         NVIC->STIR = (uint32_t)ControlLoop_IRQn;
     } else {
         TIM1->CCR1 = TIM_1_8_PERIOD_CLOCKS / 2U;

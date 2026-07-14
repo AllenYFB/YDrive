@@ -43,6 +43,8 @@ static void inductance_get_alpha_beta_output(void);
 static void update_current_controller_gains(void);
 /****************************************************************************/
 MOTOR_CONFIG motor_config;
+uint32_t motor_error;
+float pi_gains_[2];
 bool is_armed_ = false;
 
 static Iph_ABC_t DC_calib_;
