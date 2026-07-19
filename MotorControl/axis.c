@@ -12,7 +12,7 @@
 
 /*****************************************************************************/
 AXIS_State_Type current_state_;
-extern uint8_t usb_sndbuff[128];
+extern uint8_t usb_sndbuff[256];
 /*****************************************************************************/
 static int32_t float_to_i32_round(float value)
 {

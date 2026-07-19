@@ -77,7 +77,6 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
-  MX_USB_DEVICE_Init();
 
   /* USER CODE END Init */
 
@@ -121,7 +120,11 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* init code for USB_DEVICE */
+  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
+  MX_USB_DEVICE_Init();
+  osDelay(500);
+
   motor_para_init();
   motor_setup();
   motor_control_start();

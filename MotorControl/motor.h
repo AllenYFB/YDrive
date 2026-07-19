@@ -31,6 +31,7 @@
 #define ERROR_UNSUPPORTED_ENCODER_MODE (1U << 12)
 #define ERROR_ENCODER_FAILED (1U << 13)
 #define ERROR_ENCODER_NO_RESPONSE (1U << 14)
+#define ERROR_ABS_SPI_COM_FAIL (1U << 15)
 /****************************************************************************/
 typedef struct
 {

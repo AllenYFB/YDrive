@@ -54,6 +54,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/open_loop_controller.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl/utils.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../Communication/usb_command.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Drivers/Encoder/encoder_abz.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Drivers/AS5047P/as5047p.c
 )
 
 # Add include paths
@@ -61,6 +63,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_CURRENT_SOURCE_DIR}/../MotorControl
     ${CMAKE_CURRENT_SOURCE_DIR}/../Communication
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Drivers/Encoder
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Drivers/AS5047P
 )
 
 # Add project symbols (macros)

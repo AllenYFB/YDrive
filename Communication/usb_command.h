@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 extern uint8_t usb_recbuff[128];
-extern uint8_t usb_sndbuff[128];
+extern uint8_t usb_sndbuff[256];
 extern uint32_t usb_rcv_count;
 
 void usb_command_receive(const uint8_t *data, uint32_t length);

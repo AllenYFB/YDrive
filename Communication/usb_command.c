@@ -13,7 +13,7 @@
 #include <string.h>
 
 uint8_t usb_recbuff[128];
-uint8_t usb_sndbuff[128];
+uint8_t usb_sndbuff[256];
 uint32_t usb_rcv_count;
 
 static void usb_command_clear_rx(void);
@@ -88,13 +88,18 @@ void USBcommander_run(void)
     case 'E':
     case 'e':
         len = snprintf((char *)usb_sndbuff, sizeof(usb_sndbuff),
-                       "enc cnt=%ld shadow=%ld cpr=%ld pos_mturn=%ld vel_mturn_s=%ld ready=%d error=%lX\r\n",
+                       "enc mode=%d cnt=%ld abs=%ld raw=%04X spi_flags=%lX shadow=%ld cpr=%ld pos_mturn=%ld vel_mturn_s=%ld ready=%d spi_err_pm=%ld error=%lX\r\n",
+                       (int)encoder_config.mode,
                        (long)(int16_t)TIM3->CNT,
+                       (long)encoder_state.pos_abs,
+                       (unsigned int)encoder_state.abs_spi_raw,
+                       (unsigned long)encoder_state.abs_spi_error_flags,
                        (long)encoder_state.shadow_count,
                        (long)encoder_config.cpr,
                        (long)float_to_i32_round(encoder_state.pos_estimate * 1000.0f),
                        (long)float_to_i32_round(encoder_state.vel_estimate * 1000.0f),
                        (int)encoder_state.is_ready,
+                       (long)float_to_i32_round(encoder_state.spi_error_rate * 1000.0f),
                        (unsigned long)motor_error);
         usb_send_snprintf(len);
         break;
